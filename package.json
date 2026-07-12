@@ -8,7 +8,7 @@
   ],
   "license": "ISC",
   "author": "\"Neeraj Saini\"",
-  "type": "commonjs",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "dev": "nodemon src/index.js"
@@ -16,5 +16,10 @@
   "devDependencies": {
     "nodemon": "^3.1.14",
     "prettier": "^3.9.5"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "mongoose": "^9.7.4"
   }
 }
