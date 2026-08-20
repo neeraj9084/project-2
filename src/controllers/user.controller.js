@@ -16,7 +16,6 @@ const registeUser = asyncHandler(async (req, res) => {
    // xcheck for user creation 
    // return res 
      const {fullName, email, username, password} = req.body
-     console.log("email:", email);
            
            if(
             [fullName, email, username, password].some((field) =>
