@@ -12,6 +12,7 @@ const userSchema = new Schema(
       lowercase: true,
       trim: true,
       index: true,
+      match: /^[a-z0-9_@.]+$/
     },
 
     email: {
@@ -53,18 +54,69 @@ const userSchema = new Schema(
     refreshToken: {
       type: String,
     },
+    isVerified: {
+    type: Boolean,
+    default: false
+    },
+
+    verificationOtp: {
+    type: String
+    },
+
+    verificationOtpExpiry: {
+    type: Date
+    },
+    newEmail: {
+    type: String
+    },
+    changeEmail: {
+    type: String
+},
+    emailChangeOtp: {
+    type: String
+    },
+
+    emailChangeOtpExpiry: {
+    type: Date
+    },
+    forgotPasswordOtp: {
+    type: String
+},
+
+forgotPasswordOtpExpiry: {
+    type: Date
+},
+isActive: {
+    type: Boolean,
+    default: true
+},
+accountRecoveryOtp: {
+    type: String
+},
+
+accountRecoveryOtpExpiry: {
+    type: Date
+},
   },
   {
     timestamps: true,
   }
 );
-userSchema.pre("save", async function () {
 
-    if(!this.isModified("password")) return ;
+userSchema.pre("save", async function (next) {
+
+    if (!this.isModified("password")) {
+        return ;
+    }
+
+    if (this.password.startsWith("$2b$")) {
+        return ;
+    }
 
     this.password = await bcrypt.hash(this.password, 10);
-   
-})
+
+    
+});
 
 userSchema.methods.isPasswordCorrect = async function (password)
  {
