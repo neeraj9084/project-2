@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const likeSchema = new mongoose.Schema({
     video: {
-        type: mongoose.Schema.Types.objectId,
+        type: mongoose.Schema.Types.ObjectId,
         ref: "Video",
         required: [true, "Video ID is required"],
         index: true
