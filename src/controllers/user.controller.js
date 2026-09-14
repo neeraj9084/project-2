@@ -142,7 +142,7 @@ const registeUser = asyncHandler(async (req, res) => {
         text: `Your verification OTP is ${otp}. This OTP will expire in 10 minutes.`
     });
 
-    console.log("Verification OTP:", otp);
+    
 
     return res.status(201).json(
         new ApiResponse(
@@ -295,8 +295,6 @@ const resendVerificationOtp = asyncHandler(async (req, res) => {
         subject: "Your new verification OTP",
         text: `Your new verification OTP is ${otp}. This OTP will expire in 10 minutes.`
     });
-
-    console.log("New Verification OTP:", otp);
 
     return res.status(200).json(
         new ApiResponse(

@@ -48,9 +48,9 @@ const loginUser = asyncHandler(async(req, res) => {
 
    // check account state 
 
-   if(user.isBlocked) {
-    throw new ApiError(403, "Your account is blocked");
-   }
+ if (!user.isActive) {
+    throw new ApiError(403, "Your account is deactivated");
+}
       
    if (!user.isVerified) {
     throw new ApiError(403, "Please verify your email first");
@@ -146,6 +146,12 @@ const refreshAccessToken = asyncHandler(async(req, res) => {
         if(!user){
             throw new ApiError(401, "Invalid refresh token")
         }
+          
+        if (!user.isActive) {
+        throw new ApiError(403, "Account is deactivated");
+       
+       }
+
 
         if(incomingRefreshToken !== user.refreshToken){
             throw new ApiError(401, "Refresh token is expired or used");   

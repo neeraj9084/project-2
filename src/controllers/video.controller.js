@@ -13,6 +13,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
 
     let videoFilePath = null;
     let compressedVideoPath = null;
+    let thumbnailPath = null;
 
     try {
 
@@ -21,6 +22,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
         const videoFile = req.files?.videoFile?.[0];
         const thumbnail = req.files?.thumbnail?.[0];
 
+        // Validate title and description
         if (!title || !description) {
             throw new ApiError(
                 400,
@@ -28,6 +30,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
             );
         }
 
+        // Validate video
         if (!videoFile) {
             throw new ApiError(
                 400,
@@ -35,6 +38,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
             );
         }
 
+        // Validate thumbnail
         if (!thumbnail) {
             throw new ApiError(
                 400,
@@ -42,9 +46,12 @@ const publishAVideo = asyncHandler(async (req, res) => {
             );
         }
 
+        // Store temporary file paths
         videoFilePath = videoFile.path;
+        thumbnailPath = thumbnail.path;
 
-        // Compression
+      
+
         compressedVideoPath = path.join(
             "public/temp",
             `compressed-${Date.now()}.mp4`
@@ -54,8 +61,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
             videoFilePath,
             compressedVideoPath
         );
-
-        // Upload video
+      
         const videoUpload =
             await uploadOnCloudinary(
                 compressedVideoPath
@@ -67,11 +73,9 @@ const publishAVideo = asyncHandler(async (req, res) => {
                 "Video upload failed"
             );
         }
-
-        // Upload thumbnail
         const thumbnailUpload =
             await uploadOnCloudinary(
-                thumbnail.path
+                thumbnailPath
             );
 
         if (!thumbnailUpload) {
@@ -81,21 +85,28 @@ const publishAVideo = asyncHandler(async (req, res) => {
             );
         }
 
-        // Duration
+
         const duration = videoUpload.duration;
 
-        // Save in MongoDB
+
         const createdVideo = await Video.create({
+
             videoFile: videoUpload.secure_url,
+
             thumbnail: thumbnailUpload.secure_url,
 
             videoPublicId: videoUpload.public_id,
+
             thumbnailPublicId: thumbnailUpload.public_id,
 
             title: title.trim(),
+
             description: description.trim(),
+
             duration,
+
             owner: req.user._id
+
         });
 
         return res
@@ -110,15 +121,12 @@ const publishAVideo = asyncHandler(async (req, res) => {
 
     } finally {
 
-        // Temporary original video
         if (
             videoFilePath &&
             fs.existsSync(videoFilePath)
         ) {
             fs.unlinkSync(videoFilePath);
         }
-
-        // Temporary compressed video
         if (
             compressedVideoPath &&
             fs.existsSync(compressedVideoPath)
@@ -126,6 +134,13 @@ const publishAVideo = asyncHandler(async (req, res) => {
             fs.unlinkSync(compressedVideoPath);
         }
 
+      
+        if (
+            thumbnailPath &&
+            fs.existsSync(thumbnailPath)
+        ) {
+            fs.unlinkSync(thumbnailPath);
+        }
     }
 });
 

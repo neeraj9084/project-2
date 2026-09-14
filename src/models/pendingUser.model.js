@@ -56,17 +56,16 @@ const pendingUserSchema = new mongoose.Schema(
 );
 
 // Password hash
-pendingUserSchema.pre("save", async function (next) {
+pendingUserSchema.pre("save", async function () {
 
     if (!this.isModified("password")) {
-        return next();
+        return;
     }
 
     this.password = await bcrypt.hash(this.password, 10);
-   
 });
 
-// Pending user automatically delete after 15 minutes
+// Pending user automatically delete after OTP expiry
 pendingUserSchema.index(
     { verificationOtpExpiry: 1 },
     { expireAfterSeconds: 0 }
