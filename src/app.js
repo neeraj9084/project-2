@@ -28,8 +28,7 @@ import playlistRouter from "./routes/playlist.routes.js";
 
 
 // routes declaration
-
-app.use("/api/v1/users",userRouter)
+app.use("/api/v1/users", userRouter);
 app.use("/api/v1/auth", authRouter);
 app.use("/api/v1/videos", videoRouter);
 app.use("/api/v1/likes", likeRouter);
@@ -39,4 +38,24 @@ app.use("/api/v1/watch-history", watchHistoryRouter);
 app.use("/api/v1/playlists", playlistRouter);
 
 
-export default app 
+app.use((req, res) => {
+    return res.status(404).json({
+        success: false,
+        statusCode: 404,
+        message: "Route not found",
+        errors: []
+    });
+});
+
+app.use((err, req, res, next) => {
+    const statusCode = err.statusCode || 500;
+
+    return res.status(statusCode).json({
+        success: false,
+        statusCode,
+        message: err.message || "Internal Server Error",
+        errors: err.errors || []
+    });
+});
+
+export default app;

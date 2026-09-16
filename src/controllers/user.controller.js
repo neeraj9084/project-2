@@ -5,6 +5,7 @@ import { PendingUser } from "../models/pendingUser.model.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { sendEmail } from "../utils/sendEmail.js";
+import crypto from "crypto";
 
 //====================== registerUser ======================//
 
@@ -17,13 +18,13 @@ const registeUser = asyncHandler(async (req, res) => {
         password
     } = req.body;
 
-    if (
-        [fullName, email, username, password].some(
-            (field) => field?.trim() === ""
-        )
-    ) {
-        throw new ApiError(400, "All fields are required");
-    }
+   if (
+  ![fullName, email, username, password].every(
+    (field) => typeof field === "string" && field.trim()
+  )
+) {
+  throw new ApiError(400, "All fields are required");
+}
 
     const normalizedEmail = email.toLowerCase();
     const normalizedUsername = username.toLowerCase();
@@ -115,9 +116,7 @@ const registeUser = asyncHandler(async (req, res) => {
         : null;
 
     // Generate OTP
-    const otp = Math.floor(
-        100000 + Math.random() * 900000
-    ).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
 
     const otpExpiry = new Date(
         Date.now() + 10 * 60 * 1000
@@ -132,7 +131,8 @@ const registeUser = asyncHandler(async (req, res) => {
         avatar: avatar.url,
         coverImage: coverImage?.url || "",
         verificationOtp: otp,
-        verificationOtpExpiry: otpExpiry
+        verificationOtpExpiry: otpExpiry,
+        verificationOtpAttempts: 0
     });
 
     // Send OTP
@@ -199,6 +199,23 @@ const verifyEmail = asyncHandler(async (req, res) => {
 
     // Check OTP
     if (pendingUser.verificationOtp !== otp) {
+        pendingUser.verificationOtpAttempts += 1;
+
+        if (pendingUser.verificationOtpAttempts >= 5) {
+            pendingUser.verificationOtp = undefined;
+            pendingUser.verificationOtpExpiry = undefined;
+            pendingUser.verificationOtpAttempts = 0;
+
+            await pendingUser.save();
+
+            throw new ApiError(
+                429,
+                "Too many invalid OTP attempts. Please request a new OTP."
+            );
+        }
+
+        await pendingUser.save();
+
         throw new ApiError(
             400,
             "Invalid verification OTP"
@@ -275,9 +292,7 @@ const resendVerificationOtp = asyncHandler(async (req, res) => {
     }
 
     // Generate new OTP
-    const otp = Math.floor(
-        100000 + Math.random() * 900000
-    ).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
 
     const otpExpiry = new Date(
         Date.now() + 10 * 60 * 1000
@@ -286,6 +301,7 @@ const resendVerificationOtp = asyncHandler(async (req, res) => {
     // Update OTP
     pendingUser.verificationOtp = otp;
     pendingUser.verificationOtpExpiry = otpExpiry;
+    pendingUser.verificationOtpAttempts = 0;
 
     await pendingUser.save();
 
@@ -481,12 +497,12 @@ const changeUsername = asyncHandler(async (req, res) => {
     const newUsername = username.toLowerCase().trim();
 
     // Username format check
-    const usernameRegex = /^[a-z0-9_@.]+$/;
+   const usernameRegex = /^(?=.*[0-9])[a-z0-9_@.]+$/;
 
     if (!usernameRegex.test(newUsername)) {
         throw new ApiError(
             400,
-            "Username can only contain lowercase letters, numbers, _, @ and ."
+           "Username can only contain lowercase letters, numbers, _, @ and . and must contain at least one number"
         );
     }
 

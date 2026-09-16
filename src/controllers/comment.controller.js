@@ -17,7 +17,10 @@ const addComment = asyncHandler(async(req, res) => {
       throw new ApiError(400, "Invalid video ID")
     }
 
-    const video = await Video.findById(videoId);
+    const video = await Video.findOne({
+        _id: videoId,
+        isPublished: true
+    });
 
     if(!video) {
         throw new ApiError(404,"Video not found")
@@ -31,7 +34,7 @@ const addComment = asyncHandler(async(req, res) => {
 
     const comment = await Comment.create({
         video: videoId,
-        content: content,
+        content: content.trim(),
         owner: req.user._id
     })
 
@@ -60,7 +63,10 @@ const getVideoComments = asyncHandler(async(req, res) => {
     throw new ApiError(400, "Invalid video ID");
 }
 
-      const video = await Video.findById(videoId);
+      const video = await Video.findOne({
+        _id: videoId,
+        isPublished: true
+      });
 
       if(!video) {
         throw new ApiError(404, "Video not found")
@@ -100,6 +106,16 @@ const getCommentById = asyncHandler(async(req, res) => {
     if(!comment){
         throw new ApiError(404,"Comment not found")
     }
+
+    const video = await Video.findOne({
+        _id: comment.video,
+        isPublished: true
+    });
+
+    if (!video) {
+        throw new ApiError(404, "Comment not found");
+    }
+
     return res
     .status(200)
     .json(

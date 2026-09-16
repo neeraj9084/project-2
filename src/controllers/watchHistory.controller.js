@@ -18,7 +18,10 @@ const addToWatchHistory = asyncHandler(async(req, res) => {
         throw new ApiError(400, "Video ID is required") 
     } 
 
-    const video = await Video.findById(videoId);
+    const video = await Video.findOne({
+        _id: videoId,
+        isPublished: true
+    });
 
     if(!video) { 
         throw new ApiError(404, "Video not found") 
@@ -32,15 +35,15 @@ const addToWatchHistory = asyncHandler(async(req, res) => {
     });
 
     let history;
-    
+
     if(!watchHistory){
-        await WatchHistory.create({
+        history = await WatchHistory.create({
             user: userId,
             video: videoId
-        })
+        });
     }else{
         watchHistory.watchedAt = new Date();
-        await watchHistory.save();
+        history = await watchHistory.save();
     }
     
     return res
@@ -48,7 +51,7 @@ const addToWatchHistory = asyncHandler(async(req, res) => {
     .json(
         new ApiResponse(
             200,
-              watchHistory,
+              history,
             "Video added to watch history successfully"
         )
     )

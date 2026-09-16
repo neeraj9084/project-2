@@ -3,6 +3,7 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { User } from "../models/user.model.js";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import { sendEmail } from "../utils/sendEmail.js";
 
 //-----------------------login--------------------------//
@@ -170,12 +171,16 @@ const refreshAccessToken = asyncHandler(async(req, res) => {
                     "Access token refreshed successfully"
                 )
             );
-    } catch (error) {
-        throw new ApiError(
-            401,
-            error?.message || " Invalid refresh token "        
-        )
+   } catch (error) {
+    if (error instanceof ApiError) {
+        throw error;
     }
+
+    throw new ApiError(
+        401,
+        error?.message || "Invalid refresh token"
+    );
+}
 })
 
 //--------------------- changeEmail -----------------------//
@@ -199,7 +204,7 @@ const  changeEmail = asyncHandler(async(req, res) => {
 if (existedUser && existedUser._id.toString() !== req.user._id.toString()) {
     throw new ApiError(409, "Email already exists");
 }
-   const otp = Math.floor(100000 + Math.random() * 900000).toString(); 
+   const otp = crypto.randomInt(100000, 1000000).toString();
 
    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
 
@@ -212,6 +217,7 @@ if (existedUser && existedUser._id.toString() !== req.user._id.toString()) {
     user.changeEmail = changeEmail.toLowerCase();
     user.emailChangeOtp = otp;
     user.emailChangeOtpExpiry = otpExpiry;
+    user.emailChangeOtpAttempts = 0;
   
     await user.save({validateBeforeSave: false})
 
@@ -220,9 +226,6 @@ if (existedUser && existedUser._id.toString() !== req.user._id.toString()) {
     subject: "Email Change Verification OTP",
     text: `Your email change verification OTP is ${otp}. This OTP will expire in 10 minutes.`
 });
-
-    console.log("Email Change OTP:", otp);
-    console.log("OTP Expiry:", otpExpiry);
 
     return res.status(200).json(
         new ApiResponse(200, {}, "OTP sent to your new email. Please verify it to change your email")
@@ -233,9 +236,8 @@ if (existedUser && existedUser._id.toString() !== req.user._id.toString()) {
 //--------------------verifyChangedEmail--------------------//
 
 const  verifyChangedEmail = asyncHandler(async(req, res) => {
-     console.log("VERIFY BODY:", req.body);
   const { otp } = req.body;
-     console.log("OTP RECEIVED:", otp);
+
   if(!otp) {
     throw new ApiError(400, "OTP is required")
   }
@@ -252,9 +254,32 @@ const  verifyChangedEmail = asyncHandler(async(req, res) => {
     throw new ApiError(400, "Email change OTP not found")
  }
  if(user.emailChangeOtpExpiry < new Date()) {
+    user.emailChangeOtp = undefined;
+    user.emailChangeOtpExpiry = undefined;
+    user.emailChangeOtpAttempts = 0;
+
+    await user.save({ validateBeforeSave: false });
+
     throw new ApiError(400, "Email change OTP has expired")
  }
  if(user.emailChangeOtp !== otp) {
+    user.emailChangeOtpAttempts += 1;
+
+    if (user.emailChangeOtpAttempts >= 5) {
+        user.emailChangeOtp = undefined;
+        user.emailChangeOtpExpiry = undefined;
+        user.emailChangeOtpAttempts = 0;
+
+        await user.save({ validateBeforeSave: false });
+
+        throw new ApiError(
+            429,
+            "Too many invalid OTP attempts. Please request a new OTP."
+        );
+    }
+
+    await user.save({ validateBeforeSave: false });
+
     throw new ApiError(400, "Invalid email change OTP")
  }
 
@@ -262,6 +287,7 @@ const  verifyChangedEmail = asyncHandler(async(req, res) => {
     user.changeEmail = undefined;
     user.emailChangeOtp = undefined;
     user.emailChangeOtpExpiry = undefined;
+    user.emailChangeOtpAttempts = 0;
     user.isVerified = true;
 
     await user.save({
@@ -287,20 +313,17 @@ const forgotPassword = asyncHandler(async (req, res) => {
         email: email.toLowerCase()
     });
 
-    if (!user) {
-        throw new ApiError(404, "User not found");
-    }
-
-    if (!user.isVerified) {
-        throw new ApiError(
-            403,
-            "Please verify your email first"
+    if (!user || !user.isVerified) {
+        return res.status(200).json(
+            new ApiResponse(
+                200,
+                {},
+                "If the account exists, an OTP has been sent."
+            )
         );
     }
 
-    const otp = Math.floor(
-        100000 + Math.random() * 900000
-    ).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
 
     const otpExpiry = new Date(
         Date.now() + 10 * 60 * 1000
@@ -308,6 +331,7 @@ const forgotPassword = asyncHandler(async (req, res) => {
 
     user.forgotPasswordOtp = otp;
     user.forgotPasswordOtpExpiry = otpExpiry;
+    user.forgotPasswordOtpAttempts = 0;
 
     await user.save({
         validateBeforeSave: false
@@ -319,14 +343,12 @@ const forgotPassword = asyncHandler(async (req, res) => {
         text: `Your password reset OTP is ${otp}. This OTP will expire in 10 minutes.`
     });
 
-    console.log("Forgot Password OTP:", otp);
-    console.log("OTP Expiry:", otpExpiry);
 
     return res.status(200).json(
         new ApiResponse(
             200,
             {},
-            "Password reset OTP sent to your email"
+            "If the account exists, an OTP has been sent."
         )
     );
 });
@@ -366,6 +388,12 @@ const verifyForgotPasswordOtp = asyncHandler(async (req, res) => {
     }
 
     if (user.forgotPasswordOtpExpiry < new Date()) {
+        user.forgotPasswordOtp = undefined;
+        user.forgotPasswordOtpExpiry = undefined;
+        user.forgotPasswordOtpAttempts = 0;
+
+        await user.save({ validateBeforeSave: false });
+
         throw new ApiError(
             400,
             "Password reset OTP has expired"
@@ -373,6 +401,23 @@ const verifyForgotPasswordOtp = asyncHandler(async (req, res) => {
     }
 
     if (user.forgotPasswordOtp !== otp) {
+        user.forgotPasswordOtpAttempts += 1;
+
+        if (user.forgotPasswordOtpAttempts >= 5) {
+            user.forgotPasswordOtp = undefined;
+            user.forgotPasswordOtpExpiry = undefined;
+            user.forgotPasswordOtpAttempts = 0;
+
+            await user.save({ validateBeforeSave: false });
+
+            throw new ApiError(
+                429,
+                "Too many invalid OTP attempts. Please request a new OTP."
+            );
+        }
+
+        await user.save({ validateBeforeSave: false });
+
         throw new ApiError(
             400,
             "Invalid password reset OTP"
@@ -389,6 +434,11 @@ const verifyForgotPasswordOtp = asyncHandler(async (req, res) => {
             expiresIn: "10m"
         }
     );
+
+    user.passwordResetToken = resetToken;
+    user.forgotPasswordOtpAttempts = 0;
+
+await user.save({ validateBeforeSave: false });
 
     return res.status(200).json(
         new ApiResponse(
@@ -447,6 +497,13 @@ const resetPassword = asyncHandler(async (req, res) => {
             );
         }
 
+        if (user.passwordResetToken !== resetToken) {
+    throw new ApiError(
+        401,
+        "Invalid or already used password reset token"
+    );
+}
+
         user.password = newPassword;
 
         // Old sessions invalidate
@@ -455,6 +512,8 @@ const resetPassword = asyncHandler(async (req, res) => {
         // OTP cleanup
         user.forgotPasswordOtp = undefined;
         user.forgotPasswordOtpExpiry = undefined;
+
+        user.passwordResetToken = undefined;
 
         await user.save();
 
@@ -466,13 +525,17 @@ const resetPassword = asyncHandler(async (req, res) => {
             )
         );
 
-    } catch (error) {
+   } catch (error) {
 
-        throw new ApiError(
-            401,
-            error?.message || "Invalid or expired reset token"
-        );
+    if (error instanceof ApiError) {
+        throw error;
     }
+
+    throw new ApiError(
+        401,
+        error?.message || "Invalid or expired reset token"
+    );
+}
 });
 
 //--------------------- changePassword -----------------------//
@@ -633,24 +696,18 @@ const accountRecovery = asyncHandler(async (req, res) => {
         email: normalizedEmail
     });
 
-    if (!user) {
-        throw new ApiError(
-            404,
-            "User not found"
-        );
-    }
-
-    if (user.isActive) {
-        throw new ApiError(
-            400,
-            "Account is already active"
+    if (!user || user.isActive) {
+        return res.status(200).json(
+            new ApiResponse(
+                200,
+                {},
+                "If the account exists, an OTP has been sent."
+            )
         );
     }
 
     // Generate OTP
-    const otp = Math.floor(
-        100000 + Math.random() * 900000
-    ).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
 
     const otpExpiry = new Date(
         Date.now() + 10 * 60 * 1000
@@ -659,6 +716,7 @@ const accountRecovery = asyncHandler(async (req, res) => {
     // Save OTP
     user.accountRecoveryOtp = otp;
     user.accountRecoveryOtpExpiry = otpExpiry;
+    user.accountRecoveryOtpAttempts = 0;
 
     await user.save({
         validateBeforeSave: false
@@ -671,13 +729,11 @@ const accountRecovery = asyncHandler(async (req, res) => {
         text: `Your account recovery OTP is ${otp}. This OTP will expire in 10 minutes.`
     });
 
-    console.log("Account Recovery OTP:", otp);
-
     return res.status(200).json(
         new ApiResponse(
             200,
             {},
-            "Account recovery OTP sent successfully"
+            "If the account exists, an OTP has been sent."
         )
     );
 });
@@ -729,6 +785,7 @@ const verifyAccountRecovery = asyncHandler(async (req, res) => {
     if (user.accountRecoveryOtpExpiry < new Date()) {
         user.accountRecoveryOtp = undefined;
         user.accountRecoveryOtpExpiry = undefined;
+        user.accountRecoveryOtpAttempts = 0;
 
         await user.save({
             validateBeforeSave: false
@@ -742,6 +799,23 @@ const verifyAccountRecovery = asyncHandler(async (req, res) => {
 
     // Check OTP
     if (user.accountRecoveryOtp !== otp) {
+        user.accountRecoveryOtpAttempts += 1;
+
+        if (user.accountRecoveryOtpAttempts >= 5) {
+            user.accountRecoveryOtp = undefined;
+            user.accountRecoveryOtpExpiry = undefined;
+            user.accountRecoveryOtpAttempts = 0;
+
+            await user.save({ validateBeforeSave: false });
+
+            throw new ApiError(
+                429,
+                "Too many invalid OTP attempts. Please request a new OTP."
+            );
+        }
+
+        await user.save({ validateBeforeSave: false });
+
         throw new ApiError(
             400,
             "Invalid account recovery OTP"
@@ -754,6 +828,7 @@ const verifyAccountRecovery = asyncHandler(async (req, res) => {
     // OTP cleanup
     user.accountRecoveryOtp = undefined;
     user.accountRecoveryOtpExpiry = undefined;
+    user.accountRecoveryOtpAttempts = 0;
 
     // Old session remains invalid
     user.refreshToken = undefined;

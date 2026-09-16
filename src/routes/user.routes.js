@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
+import { otpLimiter } from "../middlewares/otpLimiter.middleware.js";
 import {
      registeUser, 
      verifyEmail,
@@ -12,6 +13,7 @@ import {
       } from "../controllers/user.controller.js";
 import {upload} from "../middlewares/multer.middleware.js"
 const router = Router()
+
 
 router.route("/register").post(
     upload.fields([
@@ -27,8 +29,13 @@ router.route("/register").post(
 
     registeUser
 )
-router.route("/verify-email").post(verifyEmail);
-router.route("/resend-verification-otp").post(resendVerificationOtp);
+router.route("/verify-email").post(otpLimiter, verifyEmail);
+
+router
+  .route("/resend-verification-otp")
+  .post(otpLimiter, resendVerificationOtp);
+
+
 router.route("/update-account").patch(
     verifyJWT,
     updateAccountDetails
@@ -51,8 +58,5 @@ router.route("/current-user").get(
 router
     .route("/change-username")
     .patch(verifyJWT, changeUsername);
-
-
-
 
 export default router

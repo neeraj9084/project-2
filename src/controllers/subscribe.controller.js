@@ -24,13 +24,19 @@ const subscribeToChannel = asyncHandler(async (req, res) => {
         );
     }
 
+    const channel = await User.findById(channelId);
+
+    if (!channel) {
+        throw new ApiError(404, "Channel not found");
+    }
+
     const existingSubscription = await Subscribe.findOne({
         subscriber: req.user._id,
         channel: channelId
     });
 
     if (existingSubscription) {
-    throw new ApiError(409, "Already subscribed to this channel");
+        throw new ApiError(409, "Already subscribed to this channel");
     }
 
     const subscription = await Subscribe.create({
@@ -39,17 +45,18 @@ const subscribeToChannel = asyncHandler(async (req, res) => {
     })
 
     if (!subscription) {
-    throw new ApiError(500, "Failed to subscribe to channel");
+        throw new ApiError(500, "Failed to subscribe to channel");
     }
-  return res
-    .status(201)
-    .json(
-        new ApiResponse(
-            201,
-            subscription,
-            "Channel subscribed successfully"
-        )
-    );
+
+    return res
+        .status(201)
+        .json(
+            new ApiResponse(
+                201,
+                subscription,
+                "Channel subscribed successfully"
+            )
+        );
 });
 
 //===================== unsubscribeFromChannel ====================//

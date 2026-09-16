@@ -14,8 +14,9 @@ const storage = multer.diskStorage({
     }
 });
 
-
 const fileFilter = (req, file, cb) => {
+
+    // ================= VIDEO =================
 
     if (file.fieldname === "videoFile") {
 
@@ -31,60 +32,60 @@ const fileFilter = (req, file, cb) => {
             ".webm",
             ".mov",
             ".mkv"
-        ]
+        ];
 
         const extension = file.originalname
-        .toLowerCase()
-        .slice(file.originalname.lastIndexOf("."))
+            .toLowerCase()
+            .slice(file.originalname.lastIndexOf("."));
 
-        const isValidMimeType = allowedVideoTypes.includes(file.mimetype);
-         
-         const isValidExtension = allowedVideoExtensions.includes(extension);
+        const isValidMimeType =
+            allowedVideoTypes.includes(file.mimetype);
 
-         if (!isValidMimeType && !isValidExtension) {
+        const isValidExtension =
+            allowedVideoExtensions.includes(extension);
+
+        if (!isValidMimeType || !isValidExtension) {
             return cb(
-                new Error("Only MP4, WebM, MOV and MKV videos are allowed"),
+                new Error(
+                    "Only MP4, WebM, MOV and MKV videos are allowed"
+                ),
                 false
             );
         }
     }
 
 
-    if (file.fieldname === "thumbnail") {
+    // ================= IMAGES =================
 
-    const allowedImageTypes = [
-        "image/jpeg",
-        "image/png",
-        "image/webp"
-    ];
+    if (
+        file.fieldname === "thumbnail" ||
+        file.fieldname === "avatar" ||
+        file.fieldname === "coverImage"
+    ) {
 
-    const allowedExtensions = [
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".webp"
-    ];
+        const allowedImageExtensions = [
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".webp"
+        ];
 
-    const extension = file.originalname
-        .toLowerCase()
-        .slice(file.originalname.lastIndexOf("."));
+        const extension = file.originalname
+            .toLowerCase()
+            .slice(file.originalname.lastIndexOf("."));
 
-    const isValidMimeType =
-        allowedImageTypes.includes(file.mimetype);
+        const isValidExtension =
+            allowedImageExtensions.includes(extension);
 
-    const isValidExtension =
-        allowedExtensions.includes(extension);
-
-    if (!isValidMimeType && !isValidExtension) {
-        return cb(
-            new Error(
-                "Only JPEG, PNG and WebP images are allowed"
-            ),
-            false
-        );
+        if (!isValidExtension) {
+            return cb(
+                new Error(
+                    "Only JPEG, PNG and WebP images are allowed"
+                ),
+                false
+            );
+        }
     }
-}
-
 
     cb(null, true);
 };

@@ -20,7 +20,10 @@ const likeVideo = asyncHandler(async (req, res) => {
     }
 
     // Check video exists
-    const video = await Video.findById(videoId);
+    const video = await Video.findOne({
+        _id: videoId,
+        isPublished: true
+    });
 
     if (!video) {
         throw new ApiError(404, "Video not found");
@@ -70,7 +73,10 @@ const unlikeVideo = asyncHandler(async (req, res) => {
     }
 
     // Check video exists
-    const video = await Video.findById(videoId);
+    const video = await Video.findOne({
+        _id: videoId,
+        isPublished: true
+    });
 
     if (!video) {
         throw new ApiError(404, "Video not found");
@@ -114,7 +120,8 @@ const getVideoLikeCount = asyncHandler(async (req, res) => {
 
     // Check video exists
     const videoExists = await Video.exists({
-        _id: videoId
+        _id: videoId,
+        isPublished: true
     });
 
     if (!videoExists) {
@@ -147,6 +154,7 @@ const getMyLikedVideos = asyncHandler(async (req, res) => {
     })
         .populate({
             path: "video",
+            match: { isPublished: true },
             select: "title description thumbnail owner views isPublished createdAt",
             populate: {
                 path: "owner",

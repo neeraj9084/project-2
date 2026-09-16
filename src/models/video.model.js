@@ -70,7 +70,7 @@ const videoSchema = new Schema(
     }
 );
 
-
+videoSchema.plugin(mongooseAggregatePaginate);
 
 videoSchema.index({
     owner: 1,

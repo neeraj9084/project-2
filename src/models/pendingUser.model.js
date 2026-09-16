@@ -48,6 +48,11 @@ const pendingUserSchema = new mongoose.Schema(
         verificationOtpExpiry: {
             type: Date,
             required: true
+        },
+
+        verificationOtpAttempts: {
+            type: Number,
+            default: 0
         }
     },
     {
