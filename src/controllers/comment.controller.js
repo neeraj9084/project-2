@@ -6,6 +6,7 @@ import { Video } from "../models/video.model.js"
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
+import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
 //====================== addComment ===============================//
 
@@ -25,6 +26,18 @@ const addComment = asyncHandler(async(req, res) => {
     if(!video) {
         throw new ApiError(404,"Video not found")
     }
+
+    const blocked = await isBlockedBetweenUsers(
+    req.user._id,
+    video.owner
+);
+
+if (blocked) {
+    throw new ApiError(
+        403,
+        "You cannot comment on this video"
+    );
+}
 
     const { content } = req.body;
 
@@ -63,7 +76,25 @@ const likeComment = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Invalid comment ID");
     }
 
-    const comment = await Comment.findByIdAndUpdate(
+    const comment = await Comment.findById(commentId);
+
+    if (!comment) {
+        throw new ApiError(404, "Comment not found");
+    }
+
+    const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        comment.owner
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot like this comment"
+        );
+    }
+
+    const updatedComment = await Comment.findByIdAndUpdate(
         commentId,
         {
             $addToSet: {
@@ -75,16 +106,12 @@ const likeComment = asyncHandler(async (req, res) => {
         }
     );
 
-    if (!comment) {
-        throw new ApiError(404, "Comment not found");
-    }
-
     return res.status(200).json(
         new ApiResponse(
             200,
             {
-                commentId: comment._id,
-                likeCount: comment.likes.length,
+                commentId: updatedComment._id,
+                likeCount: updatedComment.likes.length,
                 isLiked: true
             },
             "Comment liked successfully"
@@ -103,7 +130,25 @@ const unlikeComment = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Invalid comment ID");
     }
 
-    const comment = await Comment.findByIdAndUpdate(
+    const comment = await Comment.findById(commentId);
+
+    if (!comment) {
+        throw new ApiError(404, "Comment not found");
+    }
+
+    const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        comment.owner
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot unlike this comment"
+        );
+    }
+
+    const updatedComment = await Comment.findByIdAndUpdate(
         commentId,
         {
             $pull: {
@@ -115,16 +160,12 @@ const unlikeComment = asyncHandler(async (req, res) => {
         }
     );
 
-    if (!comment) {
-        throw new ApiError(404, "Comment not found");
-    }
-
     return res.status(200).json(
         new ApiResponse(
             200,
             {
-                commentId: comment._id,
-                likeCount: comment.likes.length,
+                commentId: updatedComment._id,
+                likeCount: updatedComment.likes.length,
                 isLiked: false
             },
             "Comment unliked successfully"
@@ -149,6 +190,18 @@ const getCommentLikeCount = asyncHandler(async (req, res) => {
 
     if (!comment) {
         throw new ApiError(404, "Comment not found");
+    }
+
+      const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        comment.owner
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot view likes of this comment"
+        );
     }
 
     return res.status(200).json(
@@ -187,6 +240,18 @@ const getVideoComments = asyncHandler(async(req, res) => {
       })
       .populate("owner", "username fullName avatar")
       .sort({ createdAt: -1 });
+       
+     const blocked = await isBlockedBetweenUsers(
+    req.user._id,
+    video.owner
+);
+
+if (blocked) {
+    throw new ApiError(
+        403,
+        "You cannot view comments of this video"
+    );
+}
 
       return res
     .status(200)
@@ -215,6 +280,19 @@ const getCommentById = asyncHandler(async(req, res) => {
 
     if(!comment){
         throw new ApiError(404,"Comment not found")
+    }
+
+
+    const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        comment.owner._id
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot view this comment"
+        );
     }
 
     const video = await Video.findOne({
@@ -260,6 +338,18 @@ const updateComment = asyncHandler(async(req, res) => {
 
     if(comment.owner.toString() !== req.user._id.toString()){
         throw new ApiError(403, "You are not allowed to update this comment")
+    }
+     
+       const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        comment.owner
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot update this comment"
+        );
     }
 
     comment.content = content.trim();
@@ -312,6 +402,7 @@ const deleteComment = asyncHandler(async(req, res) => {
         )
     );
 })
+
 export {
     addComment,
     likeComment,

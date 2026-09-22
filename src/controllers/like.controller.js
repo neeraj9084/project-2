@@ -6,6 +6,7 @@ import { Video } from "../models/video.model.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
+import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
 
 // ================== likeVideo ======================== //
@@ -14,12 +15,12 @@ const likeVideo = asyncHandler(async (req, res) => {
 
     const { videoId } = req.params;
 
-    // Validate video ID
+    
     if (!mongoose.Types.ObjectId.isValid(videoId)) {
         throw new ApiError(400, "Invalid video ID");
     }
 
-    // Check video exists
+    
     const video = await Video.findOne({
         _id: videoId,
         isPublished: true
@@ -29,7 +30,18 @@ const likeVideo = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Video not found");
     }
 
-    // Check if already liked
+    const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        video.owner
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot like this video"
+        );
+    }
+    
     const existingLike = await Like.findOne({
         video: videoId,
         likedBy: req.user._id
@@ -38,8 +50,7 @@ const likeVideo = asyncHandler(async (req, res) => {
     if (existingLike) {
         throw new ApiError(409, "Video already liked");
     }
-
-    // Create like
+    
     const like = await Like.create({
         video: videoId,
         likedBy: req.user._id
@@ -67,12 +78,10 @@ const unlikeVideo = asyncHandler(async (req, res) => {
 
     const { videoId } = req.params;
 
-    // Validate video ID
     if (!mongoose.Types.ObjectId.isValid(videoId)) {
         throw new ApiError(400, "Invalid video ID");
     }
 
-    // Check video exists
     const video = await Video.findOne({
         _id: videoId,
         isPublished: true
@@ -82,7 +91,18 @@ const unlikeVideo = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Video not found");
     }
 
-    // Delete user's like
+    const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        video.owner
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot unlike this video"
+        );
+    }
+
     const deletedLike = await Like.findOneAndDelete({
         video: videoId,
         likedBy: req.user._id
@@ -113,22 +133,31 @@ const getVideoLikeCount = asyncHandler(async (req, res) => {
 
     const { videoId } = req.params;
 
-    // Validate video ID
     if (!mongoose.Types.ObjectId.isValid(videoId)) {
         throw new ApiError(400, "Invalid video ID");
     }
 
-    // Check video exists
-    const videoExists = await Video.exists({
+    const video = await Video.findOne({
         _id: videoId,
         isPublished: true
-    });
+    }).select("owner");
 
-    if (!videoExists) {
+    if (!video) {
         throw new ApiError(404, "Video not found");
     }
 
-    // Count likes
+    const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        video.owner
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot view likes of this video"
+        );
+    }
+
     const likeCount = await Like.countDocuments({
         video: videoId
     });

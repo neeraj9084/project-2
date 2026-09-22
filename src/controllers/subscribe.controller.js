@@ -6,6 +6,7 @@ import { User } from "../models/user.model.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
+import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
 //==================== subscribeToChannel ====================//!SECTION
 
@@ -30,6 +31,18 @@ const subscribeToChannel = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Channel not found");
     }
 
+    const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        channelId
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot subscribe to this channel"
+        );
+    }
+
     const existingSubscription = await Subscribe.findOne({
         subscriber: req.user._id,
         channel: channelId
@@ -40,9 +53,9 @@ const subscribeToChannel = asyncHandler(async (req, res) => {
     }
 
     const subscription = await Subscribe.create({
-         subscriber: req.user._id,
-         channel: channelId
-    })
+        subscriber: req.user._id,
+        channel: channelId
+    });
 
     if (!subscription) {
         throw new ApiError(500, "Failed to subscribe to channel");
@@ -60,39 +73,51 @@ const subscribeToChannel = asyncHandler(async (req, res) => {
 });
 
 //===================== unsubscribeFromChannel ====================//
-const unsubscribeFromChannel = asyncHandler(async(req, res) => {
+const unsubscribeFromChannel = asyncHandler(async (req, res) => {
 
-     const { channelId } = req.params;
+    const { channelId } = req.params;
 
-     if (!mongoose.Types.ObjectId.isValid(channelId)) {
-    throw new ApiError(400, "Invalid channel ID");
-}
+    if (!mongoose.Types.ObjectId.isValid(channelId)) {
+        throw new ApiError(400, "Invalid channel ID");
+    }
 
-const channel = await User.findById(channelId);
+    const channel = await User.findById(channelId);
 
-if (!channel) {
-    throw new ApiError(404, "Channel not found");
-}
+    if (!channel) {
+        throw new ApiError(404, "Channel not found");
+    }
 
-const subscription = await Subscribe.findOneAndDelete({
-    subscriber: req.user._id,
-    channel: channelId
-});
-
-if (!subscription) {
-    throw new ApiError(404, "You are not subscribed to this channel");
-}
-
-return res
-    .status(200)
-    .json(
-        new ApiResponse(
-            200,
-            null,
-            "Channel unsubscribed successfully"
-        )
+    const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        channelId
     );
-})
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot unsubscribe from this channel"
+        );
+    }
+
+    const subscription = await Subscribe.findOneAndDelete({
+        subscriber: req.user._id,
+        channel: channelId
+    });
+
+    if (!subscription) {
+        throw new ApiError(404, "You are not subscribed to this channel");
+    }
+
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                null,
+                "Channel unsubscribed successfully"
+            )
+        );
+});
 
 //=================== getChannelSubscribers =====================//
 
@@ -100,25 +125,33 @@ const getChannelSubscribers = asyncHandler(async (req, res) => {
 
     const { channelId } = req.params;
 
-    // 1. Validate channel ID
     if (!mongoose.Types.ObjectId.isValid(channelId)) {
         throw new ApiError(400, "Invalid channel ID");
     }
 
-    // 2. Check channel exists
     const channel = await User.findById(channelId);
 
     if (!channel) {
         throw new ApiError(404, "Channel not found");
     }
 
-    // 3. Pagination
+    const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        channelId
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot view subscribers of this channel"
+        );
+    }
+
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 100);
 
     const skip = (page - 1) * limit;
 
-    // 4. Get subscribers + total count
     const [subscribers, totalSubscribers] = await Promise.all([
         Subscribe.find({
             channel: channelId
@@ -133,10 +166,8 @@ const getChannelSubscribers = asyncHandler(async (req, res) => {
         })
     ]);
 
-    // 5. Pagination information
     const totalPages = Math.ceil(totalSubscribers / limit);
 
-    // 6. Response
     return res
         .status(200)
         .json(
@@ -213,6 +244,7 @@ const getUserSubscriptions = asyncHandler(async (req, res) => {
             )
         );
 });
+
 export {
     subscribeToChannel,
     unsubscribeFromChannel,

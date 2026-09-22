@@ -5,6 +5,7 @@ import mongoose from "mongoose";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { User } from "../models/user.model.js";
+import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
 
 //===================== createMemberConversation =======================//
@@ -56,6 +57,24 @@ const createMemberConversation = asyncHandler(async (req, res) => {
             400,
             "One or more participants are invalid or inactive"
         );
+    }
+
+    for (const participantId of uniqueParticipantIds) {
+        if (participantId.toString() === currentUserId.toString()) {
+            continue;
+        }
+
+        const blocked = await isBlockedBetweenUsers(
+            currentUserId,
+            participantId
+        );
+
+        if (blocked) {
+            throw new ApiError(
+                403,
+                "You cannot create a group conversation with a blocked user"
+            );
+        }
     }
 
     const conversation = await Conversation.create({
@@ -139,6 +158,18 @@ const addConversationMember = asyncHandler(async (req, res) => {
 
     if (!user) {
         throw new ApiError(404, "User not found or inactive");
+    }
+
+    const blocked = await isBlockedBetweenUsers(
+        currentUserId,
+        userId
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot add a blocked user to this conversation"
+        );
     }
 
     const existingMember = await ConversationMember.findOne({
@@ -273,9 +304,10 @@ const removeConversationMember = asyncHandler(async (req, res) => {
     );
 });
 
-  //====================== leaveConversation ======================//
+//====================== leaveConversation ======================//
 
-const leaveConversation = asyncHandler(async (req, res) => {
+   const leaveConversation = asyncHandler(async (req, res) => {
+    
     const { conversationId } = req.params;
     const currentUserId = req.user?._id;
 

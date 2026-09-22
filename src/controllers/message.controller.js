@@ -7,6 +7,7 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { Message } from "../models/message.model.js";
 import { Conversation } from "../models/conversation.model.js";
 import { ConversationMember } from "../models/conversationMember.model.js";
+import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
 // ====================== sendMessage ====================== //
 
@@ -73,11 +74,30 @@ const sendMessage = asyncHandler(async (req, res) => {
             );
 
         if (!isParticipant) {
-            throw new ApiError(
-                403,
-                "You are not a participant of this conversation"
-            );
-        }
+    throw new ApiError(
+        403,
+        "You are not a participant of this conversation"
+    );
+}
+
+const otherParticipant = conversation.participants.find(
+    (participant) =>
+        participant.toString() !== currentUserId.toString()
+);
+
+if (otherParticipant) {
+    const blocked = await isBlockedBetweenUsers(
+        currentUserId,
+        otherParticipant
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot send messages to this user"
+        );
+    }
+}
 
     } else if (conversation.type === "group") {
 
@@ -246,6 +266,27 @@ const getMessages = asyncHandler(async (req, res) => {
             );
         }
 
+        const otherParticipant =
+            conversation.participants.find(
+                (participant) =>
+                    participant.toString() !==
+                    currentUserId.toString()
+            );
+
+        if (otherParticipant) {
+            const blocked = await isBlockedBetweenUsers(
+                currentUserId,
+                otherParticipant
+            );
+
+            if (blocked) {
+                throw new ApiError(
+                    403,
+                    "Conversation is not available"
+                );
+            }
+        }
+
     } else if (conversation.type === "group") {
 
         const member =
@@ -363,6 +404,42 @@ const editMessage = asyncHandler(async (req, res) => {
             404,
             "Message not found or you are not the sender"
         );
+    }
+
+    const conversation = await Conversation.findOne({
+        _id: message.conversation,
+        isActive: true
+    });
+
+    if (!conversation) {
+        throw new ApiError(
+            404,
+            "Conversation not found"
+        );
+    }
+
+    if (conversation.type === "direct") {
+
+        const otherParticipant =
+            conversation.participants.find(
+                (participant) =>
+                    participant.toString() !==
+                    currentUserId.toString()
+            );
+
+        if (otherParticipant) {
+            const blocked = await isBlockedBetweenUsers(
+                currentUserId,
+                otherParticipant
+            );
+
+            if (blocked) {
+                throw new ApiError(
+                    403,
+                    "Conversation is not available"
+                );
+            }
+        }
     }
 
     if (message.type !== "text") {
@@ -614,6 +691,27 @@ const getUnreadMessageCount = asyncHandler(async (req, res) => {
         }
     }
 
+    const otherParticipant =
+    conversation.participants.find(
+        (participant) =>
+            participant.toString() !==
+            currentUserId.toString()
+    );
+
+if (otherParticipant) {
+    const blocked = await isBlockedBetweenUsers(
+        currentUserId,
+        otherParticipant
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "Conversation is not available"
+        );
+    }
+}
+
     else if (conversation.type === "group") {
         const member =
             await ConversationMember.findOne({
@@ -741,6 +839,27 @@ const searchMessages = asyncHandler(async (req, res) => {
                 "You are not a participant of this conversation"
             );
         }
+const otherParticipant =
+    conversation.participants.find(
+        (participant) =>
+            participant.toString() !==
+            currentUserId.toString()
+    );
+
+if (otherParticipant) {
+    const blocked = await isBlockedBetweenUsers(
+        currentUserId,
+        otherParticipant
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "Conversation is not available"
+        );
+    }
+}
+
     } else if (conversation.type === "group") {
         const member =
             await ConversationMember.findOne({
@@ -911,6 +1030,27 @@ const replyToMessage = asyncHandler(async (req, res) => {
             );
         }
 
+        const otherParticipant =
+            conversation.participants.find(
+                (participant) =>
+                    participant.toString() !==
+                    currentUserId.toString()
+            );
+
+        if (otherParticipant) {
+            const blocked = await isBlockedBetweenUsers(
+                currentUserId,
+                otherParticipant
+            );
+
+            if (blocked) {
+                throw new ApiError(
+                    403,
+                    "Conversation is not available"
+                );
+            }
+        }
+
     } else if (conversation.type === "group") {
 
         const member =
@@ -1073,6 +1213,7 @@ const forwardMessage = asyncHandler(async (req, res) => {
     }
 
     if (conversation.type === "direct") {
+
         const isParticipant =
             conversation.participants.some(
                 (participant) =>
@@ -1086,7 +1227,30 @@ const forwardMessage = asyncHandler(async (req, res) => {
                 "You are not a participant of this conversation"
             );
         }
+
+        const otherParticipant =
+            conversation.participants.find(
+                (participant) =>
+                    participant.toString() !==
+                    currentUserId.toString()
+            );
+
+        if (otherParticipant) {
+            const blocked = await isBlockedBetweenUsers(
+                currentUserId,
+                otherParticipant
+            );
+
+            if (blocked) {
+                throw new ApiError(
+                    403,
+                    "Conversation is not available"
+                );
+            }
+        }
+
     } else if (conversation.type === "group") {
+
         const member =
             await ConversationMember.findOne({
                 conversation: conversationId,
@@ -1100,6 +1264,7 @@ const forwardMessage = asyncHandler(async (req, res) => {
                 "You are not a member of this conversation"
             );
         }
+
     } else {
         throw new ApiError(
             400,

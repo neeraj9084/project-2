@@ -4,6 +4,7 @@ import { Video } from "../models/video.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
 const shareVideo = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
@@ -22,6 +23,18 @@ const shareVideo = asyncHandler(async (req, res) => {
 
     if (!video || !video.isPublished) {
         throw new ApiError(404, "Video not found");
+    }
+
+      const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        video.owner
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot view shares of this video"
+        );
     }
 
     const share = await Share.create({
@@ -45,6 +58,7 @@ const shareVideo = asyncHandler(async (req, res) => {
     );
 });
 
+
 const getVideoShareCount = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
 
@@ -58,6 +72,18 @@ const getVideoShareCount = asyncHandler(async (req, res) => {
 
     if (!video || !video.isPublished) {
         throw new ApiError(404, "Video not found");
+    }
+    
+     const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        video.owner
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot share this video"
+        );
     }
 
     const shareCount = await Share.countDocuments({

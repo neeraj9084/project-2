@@ -5,39 +5,36 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { Message } from "../models/message.model.js";
+import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
 //===================== createDirectConversation =========================//
+
 const createDirectConversation = asyncHandler(async (req, res) => {
 
     const { participantId } = req.body;
 
     const currentUserId = req.user?._id;
-
-    // Current user check
+    
     if (!currentUserId) {
         throw new ApiError(
             401,
             "Unauthorized request"
         );
     }
-
-    // Other user check
+  
     if (!participantId) {
         throw new ApiError(
             400,
             "Participant ID is required"
         );
     }
-
-    // ObjectId validation
     if (!mongoose.Types.ObjectId.isValid(participantId)) {
         throw new ApiError(
             400,
             "Invalid participant ID"
         );
     }
-
-    // Cannot chat with yourself
+f
     if (
         currentUserId.toString() ===
         participantId.toString()
@@ -47,8 +44,6 @@ const createDirectConversation = asyncHandler(async (req, res) => {
             "You cannot create a conversation with yourself"
         );
     }
-
-    // Check other user exists and active
     const user = await User.findOne({
         _id: participantId,
         isActive: true
@@ -61,7 +56,18 @@ const createDirectConversation = asyncHandler(async (req, res) => {
         );
     }
 
-    // Check existing direct conversation
+    const blocked = await isBlockedBetweenUsers(
+    currentUserId,
+    participantId
+);
+
+if (blocked) {
+    throw new ApiError(
+        403,
+        "You cannot access this conversation"
+    );
+}
+  
     const existingConversation =
         await Conversation.findOne({
             type: "direct",
@@ -84,7 +90,7 @@ const createDirectConversation = asyncHandler(async (req, res) => {
         );
     }
 
-    // Create direct conversation
+  
     const conversation =
         await Conversation.create({
             participants: [
@@ -167,8 +173,6 @@ const getUserConversation = asyncHandler(async(req, res) => {
 
 const getConversationById = asyncHandler(async (req, res) => {
     const { conversationId } = req.params;
-
-
     const userId = req.user?._id;
 
     if (!userId) {
@@ -195,6 +199,27 @@ const getConversationById = asyncHandler(async (req, res) => {
 
     if (!conversation) {
         throw new ApiError(404, "Conversation not found");
+    }
+
+    if (conversation.type === "direct") {
+        const otherParticipant = conversation.participants.find(
+            (participant) =>
+                participant._id.toString() !== userId.toString()
+        );
+
+        if (otherParticipant) {
+            const blocked = await isBlockedBetweenUsers(
+                userId,
+                otherParticipant._id
+            );
+
+            if (blocked) {
+                throw new ApiError(
+                    403,
+                    "Conversation is not available"
+                );
+            }
+        }
     }
 
     return res.status(200).json(
@@ -234,6 +259,18 @@ const findDirectConversation = asyncHandler(async (req, res) => {
     if(!user){
         throw new ApiError(404, "User not found or inactive");
     }
+
+    const blocked = await isBlockedBetweenUsers(
+    currentUserId,
+    userId
+);
+
+if (blocked) {
+    throw new ApiError(
+        403,
+        "You cannot access this conversation"
+    );
+}
 
     const conversation = await Conversation.findOne({
         type: "direct",

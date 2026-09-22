@@ -8,6 +8,7 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { Video } from "../models/video.model.js";
 import { deleteFromCloudinary,uploadOnCloudinary } from "../utils/cloudinary.js";
 import { compressVideo } from "../utils/ffmpeg.js";
+import { BlockedUser } from "../models/blockedUser.model.js";
 
 const escapeRegex = (value) =>
     value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -287,6 +288,15 @@ const getAllVideos = asyncHandler(async (req, res) => {
         ? req.query.sortType[0]
         : req.query.sortType;
 
+    const userId = req.user?._id;
+
+    if (!userId) {
+        throw new ApiError(
+            401,
+            "Unauthorized request"
+        );
+    }
+
     let pageNumber = 1;
     let limitNumber = 10;
 
@@ -365,9 +375,34 @@ const getAllVideos = asyncHandler(async (req, res) => {
             ? 1
             : -1;
 
+    const blockedUsers = await BlockedUser.find({
+        $or: [
+            {
+                blocker: userId
+            },
+            {
+                blockedUser: userId
+            }
+        ]
+    })
+        .select("blocker blockedUser")
+        .lean();
+
+    const blockedUserIds = blockedUsers.map((block) =>
+        block.blocker.toString() === userId.toString()
+            ? block.blockedUser
+            : block.blocker
+    );
+
     const matchStage = {
         isPublished: true
     };
+
+    if (blockedUserIds.length > 0) {
+        matchStage.owner = {
+            $nin: blockedUserIds
+        };
+    }
 
     if (
         typeof rawSearch === "string" &&
@@ -398,14 +433,12 @@ const getAllVideos = asyncHandler(async (req, res) => {
         {
             $match: matchStage
         },
-
         {
             $sort: {
                 [sortBy]: sortOrder,
                 _id: -1
             }
         },
-
         {
             $lookup: {
                 from: "users",
@@ -414,11 +447,9 @@ const getAllVideos = asyncHandler(async (req, res) => {
                 as: "owner"
             }
         },
-
         {
             $unwind: "$owner"
         },
-
         {
             $project: {
                 videoFile: 1,
@@ -429,7 +460,6 @@ const getAllVideos = asyncHandler(async (req, res) => {
                 views: 1,
                 isPublished: 1,
                 createdAt: 1,
-
                 owner: {
                     _id: "$owner._id",
                     username: "$owner.username",
@@ -496,6 +526,18 @@ const getVideoById = asyncHandler(async (req, res) => {
         throw new ApiError(
             404,
             "Video not found"
+        );
+    }
+
+    const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        video.owner._id
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "Video is not available"
         );
     }
 
@@ -854,23 +896,46 @@ const incrementVideoViews = asyncHandler(async (req, res) => {
         );
     }
 
-    const video =
-        await Video.findOneAndUpdate(
-            {
-                _id: videoId,
-                isPublished: true
-            },
-            {
-                $inc: {
-                    views: 1
-                }
-            },
-            {
-                new: true
-            }
-        );
+    const video = await Video.findOne({
+        _id: videoId,
+        isPublished: true
+    }).select("_id owner views");
 
     if (!video) {
+        throw new ApiError(
+            404,
+            "Video not found"
+        );
+    }
+
+    const blocked = await isBlockedBetweenUsers(
+        req.user._id,
+        video.owner
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "Video is not available"
+        );
+    }
+
+    const updatedVideo = await Video.findOneAndUpdate(
+        {
+            _id: videoId,
+            isPublished: true
+        },
+        {
+            $inc: {
+                views: 1
+            }
+        },
+        {
+            new: true
+        }
+    );
+
+    if (!updatedVideo) {
         throw new ApiError(
             404,
             "Video not found"
@@ -883,7 +948,7 @@ const incrementVideoViews = asyncHandler(async (req, res) => {
             new ApiResponse(
                 200,
                 {
-                    views: video.views
+                    views: updatedVideo.views
                 },
                 "Video views incremented successfully"
             )

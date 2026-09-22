@@ -5,6 +5,7 @@ import mongoose from "mongoose";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
 
 //======================= createPlaylist =======================//
@@ -296,7 +297,18 @@ const getPlaylistById = asyncHandler(async (req, res) => {
         );
     }
 
-    // Private playlist -> owner only
+    const blocked = await isBlockedBetweenUsers(
+        userId,
+        playlist.owner
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "Playlist is not available"
+        );
+    }
+
     if (
         !playlist.isPublic &&
         playlist.owner.toString() !== userId.toString()
@@ -752,8 +764,6 @@ const removeVideoFromPlaylist = asyncHandler(async (req, res) => {
         );
 });
 
-
-//======================= exports =======================//
 
 export {
     createPlaylist,

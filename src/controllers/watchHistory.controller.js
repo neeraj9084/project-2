@@ -7,27 +7,40 @@ import { Video } from "../models/video.model.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
+import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
 //==================== addToWatchHistory ====================//
 
-const addToWatchHistory = asyncHandler(async(req, res) => { 
+const addToWatchHistory = asyncHandler(async (req, res) => {
 
-    const { videoId } = req.params; 
+    const { videoId } = req.params;
 
-    if(!videoId) { 
-        throw new ApiError(400, "Video ID is required") 
-    } 
+    if (!videoId) {
+        throw new ApiError(400, "Video ID is required");
+    }
 
     const video = await Video.findOne({
         _id: videoId,
         isPublished: true
     });
 
-    if(!video) { 
-        throw new ApiError(404, "Video not found") 
+    if (!video) {
+        throw new ApiError(404, "Video not found");
     }
 
     const userId = req.user._id;
+
+    const blocked = await isBlockedBetweenUsers(
+        userId,
+        video.owner
+    );
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "Video is not available"
+        );
+    }
 
     const watchHistory = await WatchHistory.findOne({
         user: userId,
@@ -36,49 +49,80 @@ const addToWatchHistory = asyncHandler(async(req, res) => {
 
     let history;
 
-    if(!watchHistory){
+    if (!watchHistory) {
         history = await WatchHistory.create({
             user: userId,
             video: videoId
         });
-    }else{
+    } else {
         watchHistory.watchedAt = new Date();
         history = await watchHistory.save();
     }
-    
-    return res
-    .status(200)
-    .json(
-        new ApiResponse(
-            200,
-              history,
-            "Video added to watch history successfully"
-        )
-    )
 
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                history,
+                "Video added to watch history successfully"
+            )
+        );
 });
 
 //===================== getWatchHistory ========================//
 
-const getWatchHistory = asyncHandler(async(req, res) => {
+const getWatchHistory = asyncHandler(async (req, res) => {
 
     const userId = req.user._id;
+
+    const blockedUsers = await BlockedUser.find({
+        $or: [
+            {
+                blocker: userId
+            },
+            {
+                blockedUser: userId
+            }
+        ]
+    })
+        .select("blocker blockedUser")
+        .lean();
+
+    const blockedUserIds = blockedUsers.map((block) =>
+        block.blocker.toString() === userId.toString()
+            ? block.blockedUser
+            : block.blocker
+    );
 
     const history = await WatchHistory.find({
         user: userId
     })
-    .populate("video")
-    .sort({ watchedAt: -1 });
-    
-    return res
-    .status(200)
-    .json(
-        new ApiResponse(
-            200,
-            history,
-            "Watch history fetched successfully"
-        )
+        .populate({
+            path: "video",
+            match: {
+                owner: {
+                    $nin: blockedUserIds
+                }
+            }
+        })
+        .sort({
+            watchedAt: -1
+        });
+
+    const filteredHistory = history.filter(
+        (item) => item.video
     );
+
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                filteredHistory,
+                "Watch history fetched successfully"
+            )
+        );
 });
 
 //===================== removeFromWatchHistory ======================//
