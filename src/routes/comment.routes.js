@@ -5,7 +5,10 @@ import {
     getVideoComments,
     getCommentById,
     updateComment,
-    deleteComment
+    deleteComment,
+    likeComment,
+    unlikeComment,
+    getCommentLikeCount
 } from "../controllers/comment.controller.js";
 
 import { verifyJWT } from "../middlewares/auth.middleware.js";
@@ -26,5 +29,16 @@ router.patch("/:commentId", verifyJWT, updateComment);
 
 // Delete comment
 router.delete("/:commentId", verifyJWT, deleteComment);
+
+
+// Like comment
+router.post("/:commentId/like", verifyJWT, likeComment);
+
+// Unlike comment
+router.delete("/:commentId/like", verifyJWT, unlikeComment);
+
+// Get comment like count
+router.get("/:commentId/likes", getCommentLikeCount);
+
 
 export default router;
