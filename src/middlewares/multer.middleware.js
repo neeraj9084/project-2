@@ -16,10 +16,10 @@ const storage = multer.diskStorage({
 
 const fileFilter = (req, file, cb) => {
 
-    // ================= VIDEO =================
-
-    if (file.fieldname === "videoFile") {
-
+    if (
+        file.fieldname === "videoFile" ||
+        file.fieldname === "video"
+    ) {
         const allowedVideoTypes = [
             "video/mp4",
             "video/webm",
@@ -54,14 +54,17 @@ const fileFilter = (req, file, cb) => {
         }
     }
 
-
-    // ================= IMAGES =================
-
     if (
         file.fieldname === "thumbnail" ||
         file.fieldname === "avatar" ||
-        file.fieldname === "coverImage"
+        file.fieldname === "coverImage" ||
+        file.fieldname === "image"
     ) {
+        const allowedImageTypes = [
+            "image/jpeg",
+            "image/png",
+            "image/webp"
+        ];
 
         const allowedImageExtensions = [
             ".jpg",
@@ -74,10 +77,16 @@ const fileFilter = (req, file, cb) => {
             .toLowerCase()
             .slice(file.originalname.lastIndexOf("."));
 
+        const isValidMimeType =
+            allowedImageTypes.includes(file.mimetype);
+
         const isValidExtension =
             allowedImageExtensions.includes(extension);
 
-        if (!isValidExtension) {
+        if (
+            !isValidMimeType ||
+            !isValidExtension
+        ) {
             return cb(
                 new Error(
                     "Only JPEG, PNG and WebP images are allowed"
