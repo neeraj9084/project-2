@@ -8,97 +8,91 @@ import { sendEmail } from "../utils/sendEmail.js";
 
 //-----------------------login--------------------------//
 
-const loginUser = asyncHandler(async(req, res) => {
+const loginUser = asyncHandler(async (req, res) => {
+    const { email, username, password } = req.body;
 
-   // login details
-
-    const {  email, username, password } = req.body
-
-    if((!email && !username) || !password){
-        throw new ApiError(400, "Username aur email and password are required");
+    if ((!email && !username) || !password) {
+        throw new ApiError(
+            400,
+            "Username or email and password are required"
+        );
     }
 
- // find user
+    let user;
 
-        let user
-        
-        if(username) {
-            user = await User.findOne({
-                username: username.toLowerCase()
-            });
-        } else {
-            user = await User.findOne({
-                email: email.toLowerCase()
-            })
-        }
-       
-
-    // checks user
-
-    if(!user){
-        throw new ApiError(401,"Invalid Credential")
+    if (username) {
+        user = await User.findOne({
+            username: username.toLowerCase()
+        });
+    } else {
+        user = await User.findOne({
+            email: email.toLowerCase()
+        });
     }
 
-    // check password
+    if (!user) {
+        throw new ApiError(401, "Invalid Credential");
+    }
 
     const isPasswordCorrect = await user.isPasswordCorrect(password);
 
-    if(!isPasswordCorrect){
-        throw new ApiError(401,"Invalid Credential")
+    if (!isPasswordCorrect) {
+        throw new ApiError(401, "Invalid Credential");
     }
 
-   // check account state 
-
- if (!user.isActive) {
-    throw new ApiError(403, "Your account is deactivated");
-}
-      
-   if (!user.isVerified) {
-    throw new ApiError(403, "Please verify your email first");
-   }
-
-   // generate tokens 
-
-   const accessToken = user.generateAccessToken();
-   const refreshToken = user.generateRefreshToken();
-
-   // save refresh Token
-
-   user.refreshToken = refreshToken;
-
-   await user.save({
-    validateBeforeSave: false
-   })
-
-   // remove sensetive information 
-
-   const loggedInUser = await User.findById(user._id).select(
-    "-password -refreshToken"
-   )
-
-   // check user
-
-    if(!loggedInUser){
-        throw new ApiError(500, "Something went wrong while logging in")
+    if (!user.isActive) {
+        throw new ApiError(403, "Your account is deactivated");
     }
-   
-    // response 
+
+    if (!user.isVerified) {
+        throw new ApiError(
+            403,
+            "Please verify your email first"
+        );
+    }
+
+    const accessToken = user.generateAccessToken();
+    const refreshToken = user.generateRefreshToken();
+
+    user.refreshToken = refreshToken;
+
+    await user.save({
+        validateBeforeSave: false
+    });
+
+    const loggedInUser = await User.findById(user._id).select(
+        "-password -refreshToken"
+    );
+
+    if (!loggedInUser) {
+        throw new ApiError(
+            500,
+            "Something went wrong while logging in"
+        );
+    }
 
     return res
-    .status(200)
-    .cookie("accessToken", accessToken,{
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production"
-    })
-    .cookie("refreshToken", refreshToken,{
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production"
-    })
-    .json(
-        new ApiResponse(200,{user: loggedInUser,accessToken},
-            "User logged in successfully"
-        )
-    ); 
+        .status(200)
+        .cookie("accessToken", accessToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "strict"
+        })
+        .cookie("refreshToken", refreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "strict"
+        })
+        .json(
+            new ApiResponse(
+                200,
+                {
+                    user: loggedInUser,
+                    accessToken
+                },
+                "User logged in successfully"
+            )
+        );
 });
 
 //-------------------------logout-----------------------//

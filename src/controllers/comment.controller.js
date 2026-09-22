@@ -53,6 +53,116 @@ const addComment = asyncHandler(async(req, res) => {
     )
 })
 
+//===================== likeComment ===============================//
+
+const likeComment = asyncHandler(async (req, res) => {
+
+    const { commentId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(commentId)) {
+        throw new ApiError(400, "Invalid comment ID");
+    }
+
+    const comment = await Comment.findByIdAndUpdate(
+        commentId,
+        {
+            $addToSet: {
+                likes: req.user._id
+            }
+        },
+        {
+            new: true
+        }
+    );
+
+    if (!comment) {
+        throw new ApiError(404, "Comment not found");
+    }
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                commentId: comment._id,
+                likeCount: comment.likes.length,
+                isLiked: true
+            },
+            "Comment liked successfully"
+        )
+    );
+});
+
+
+//=============== Unlike a comment==========================//
+
+const unlikeComment = asyncHandler(async (req, res) => {
+
+    const { commentId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(commentId)) {
+        throw new ApiError(400, "Invalid comment ID");
+    }
+
+    const comment = await Comment.findByIdAndUpdate(
+        commentId,
+        {
+            $pull: {
+                likes: req.user._id
+            }
+        },
+        {
+            new: true
+        }
+    );
+
+    if (!comment) {
+        throw new ApiError(404, "Comment not found");
+    }
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                commentId: comment._id,
+                likeCount: comment.likes.length,
+                isLiked: false
+            },
+            "Comment unliked successfully"
+        )
+    );
+});
+
+
+//=============== Get comment like count==========================//!SECTION
+
+const getCommentLikeCount = asyncHandler(async (req, res) => {
+
+    const { commentId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(commentId)) {
+        throw new ApiError(400, "Invalid comment ID");
+    }
+
+    const comment = await Comment
+        .findById(commentId)
+        .select("likes");
+
+    if (!comment) {
+        throw new ApiError(404, "Comment not found");
+    }
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                commentId: comment._id,
+                likeCount: comment.likes.length
+            },
+            "Comment like count fetched successfully"
+        )
+    );
+});
+
 //=====================getVideoComments =====================//
 
 const getVideoComments = asyncHandler(async(req, res) => {
@@ -204,6 +314,9 @@ const deleteComment = asyncHandler(async(req, res) => {
 })
 export {
     addComment,
+    likeComment,
+    unlikeComment,
+    getCommentLikeCount,
     getVideoComments,
     getCommentById,
     updateComment,
