@@ -36,8 +36,7 @@ const registeUser = asyncHandler(async (req, res) => {
         throw new ApiError(
             400,
             "Username can only contain letters, numbers, _, @ and . and must contain at least one number"
-        );
-    }
+        );    }
 
     // Check already registered user
     const existedUser = await User.findOne({
