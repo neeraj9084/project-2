@@ -127,6 +127,11 @@ const userSchema = new Schema(
             type: Boolean,
             default: true
         },
+        role: {
+    type: String,
+    enum: ["user", "admin"],
+    default: "user",
+},
     },
 
     {
@@ -156,7 +161,8 @@ userSchema.methods.generateAccessToken = function () {
             _id: this._id,
             email: this.email,
             username: this.username,
-            fullName: this.fullName
+            fullName: this.fullName,
+            role: this.role
         },
         process.env.ACCESS_TOKEN_SECRET,
         {
