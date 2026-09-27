@@ -23,20 +23,15 @@ const blockedUserSchema = new mongoose.Schema(
 );
 
 
-// User cannot block themselves
-blockedUserSchema.pre("validate", function (next) {
+blockedUserSchema.pre("validate", function () {
 
     if (
         this.blocker &&
         this.blockedUser &&
         this.blocker.equals(this.blockedUser)
     ) {
-        return next(
-            new Error("User cannot block themselves")
-        );
+        throw new Error("User cannot block themselves");
     }
-
-    next();
 });
 
 
