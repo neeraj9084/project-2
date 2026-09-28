@@ -1,20 +1,21 @@
 import { Router } from "express";
 
+import { verifyJWT } from "../middlewares/auth.middleware.js";
+
 import {
     reportVideo,
-    getMyReports,
+    getMyReports
 } from "../controllers/report.controller.js";
-
-import { verifyJWT } from "../middlewares/auth.middleware.js";
 
 const router = Router();
 
+// Authentication required
 router.use(verifyJWT);
 
+// Report a video
+router.post("/video/:videoId", reportVideo);
 
-router.post("/:videoId", reportVideo);
-
-
+// Get my video reports
 router.get("/my", getMyReports);
 
 export default router;
