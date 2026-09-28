@@ -1,14 +1,13 @@
 import mongoose from "mongoose";
-
 import { Subscribe } from "../models/subscribe.model.js";
+import { Notification } from "../models/notification.model.js";
 import { User } from "../models/user.model.js";
-
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
-//==================== subscribeToChannel ====================//!SECTION
+//========================== subscribeToChannel ====================//
 
 const subscribeToChannel = asyncHandler(async (req, res) => {
 
@@ -61,6 +60,24 @@ const subscribeToChannel = asyncHandler(async (req, res) => {
         throw new ApiError(500, "Failed to subscribe to channel");
     }
 
+    //==================== NOTIFICATION HOOK ====================//
+
+    await Notification.create({
+        recipient: channelId,
+        actor: req.user._id,
+        type: "subscription",
+        title: "New Subscriber",
+        message: `${req.user.username} subscribed to your channel`,
+        entityType: "user",
+        entityId: req.user._id,
+        data: {
+            subscriberId: req.user._id,
+            channelId: channelId
+        }
+    });
+
+    //===========================================================//
+
     return res
         .status(201)
         .json(
@@ -73,6 +90,7 @@ const subscribeToChannel = asyncHandler(async (req, res) => {
 });
 
 //===================== unsubscribeFromChannel ====================//
+
 const unsubscribeFromChannel = asyncHandler(async (req, res) => {
 
     const { channelId } = req.params;
@@ -148,7 +166,11 @@ const getChannelSubscribers = asyncHandler(async (req, res) => {
     }
 
     const page = Math.max(Number(req.query.page) || 1, 1);
-    const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 100);
+
+    const limit = Math.min(
+        Math.max(Number(req.query.limit) || 10, 1),
+        100
+    );
 
     const skip = (page - 1) * limit;
 
@@ -250,4 +272,4 @@ export {
     unsubscribeFromChannel,
     getChannelSubscribers,
     getUserSubscriptions
-}
+};
