@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 import { Like } from "../models/like.model.js";
 import { Video } from "../models/video.model.js";
+import { Notification } from "../models/notification.model.js";
 
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
@@ -15,12 +16,10 @@ const likeVideo = asyncHandler(async (req, res) => {
 
     const { videoId } = req.params;
 
-    
     if (!mongoose.Types.ObjectId.isValid(videoId)) {
         throw new ApiError(400, "Invalid video ID");
     }
 
-    
     const video = await Video.findOne({
         _id: videoId,
         isPublished: true
@@ -41,7 +40,7 @@ const likeVideo = asyncHandler(async (req, res) => {
             "You cannot like this video"
         );
     }
-    
+
     const existingLike = await Like.findOne({
         video: videoId,
         likedBy: req.user._id
@@ -50,7 +49,7 @@ const likeVideo = asyncHandler(async (req, res) => {
     if (existingLike) {
         throw new ApiError(409, "Video already liked");
     }
-    
+
     const like = await Like.create({
         video: videoId,
         likedBy: req.user._id
@@ -59,6 +58,33 @@ const likeVideo = asyncHandler(async (req, res) => {
     if (!like) {
         throw new ApiError(500, "Failed to like video");
     }
+
+
+    // ================== Notification ================== //
+
+    // Don't send notification if user likes their own video
+    if (video.owner.toString() !== req.user._id.toString()) {
+
+        await Notification.create({
+            recipient: video.owner,
+            actor: req.user._id,
+            type: "like",
+
+            title: "New Video Like",
+
+            message: `${req.user.username} liked your video: ${video.title}`,
+
+            entityType: "video",
+            entityId: video._id,
+
+            data: {
+                videoId: video._id,
+                videoTitle: video.title,
+                likerId: req.user._id
+            }
+        });
+    }
+
 
     return res
         .status(201)
@@ -184,7 +210,8 @@ const getMyLikedVideos = asyncHandler(async (req, res) => {
         .populate({
             path: "video",
             match: { isPublished: true },
-            select: "title description thumbnail owner views isPublished createdAt",
+            select:
+                "title description thumbnail owner views isPublished createdAt",
             populate: {
                 path: "owner",
                 select: "username fullName avatar"
