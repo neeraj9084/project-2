@@ -27,7 +27,7 @@ const reportVideo = asyncHandler(async (req, res) => {
 
     // Check video exists
     const video = await Video.findById(videoId)
-        .select("_id owner isPublished")
+        .select("_id owner")
         .lean();
 
     if (!video) {
@@ -50,6 +50,7 @@ const reportVideo = asyncHandler(async (req, res) => {
         });
     } catch (error) {
 
+        // Duplicate report
         if (error?.code === 11000) {
             throw new ApiError(
                 409,
@@ -68,6 +69,7 @@ const reportVideo = asyncHandler(async (req, res) => {
                 videoId: report.video,
                 reason: report.reason,
                 description: report.description,
+                status: report.status,
                 reportedAt: report.createdAt,
             },
             "Video reported successfully"
@@ -80,11 +82,15 @@ const reportVideo = asyncHandler(async (req, res) => {
 const getMyReports = asyncHandler(async (req, res) => {
 
     const reports = await Report.find({
-        reporter: req.user._id
+        reporter: req.user._id,
     })
         .populate({
             path: "video",
-            select: "_id title thumbnail owner"
+            select: "_id title thumbnail owner",
+            populate: {
+                path: "owner",
+                select: "_id username fullName avatar",
+            },
         })
         .sort({ createdAt: -1 })
         .lean();
@@ -100,5 +106,5 @@ const getMyReports = asyncHandler(async (req, res) => {
 
 export {
     reportVideo,
-    getMyReports
+    getMyReports,
 };
