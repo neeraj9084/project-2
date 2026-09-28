@@ -4,21 +4,28 @@ import cookieParser from "cookie-parser";
 
 const app = express();
 
-app.use(cors({
-    origin: process.env.CORS_ORIGIN,
-    credentials: true
-}));
+app.use(
+    cors({
+        origin: process.env.CORS_ORIGIN,
+        credentials: true,
+    })
+);
 
 app.use(express.json({ limit: "16kb" }));
-app.use(express.urlencoded({
-    extended: true,
-    limit: "16kb"
-}));
+
+app.use(
+    express.urlencoded({
+        extended: true,
+        limit: "16kb",
+    })
+);
+
 app.use(express.static("public"));
+
 app.use(cookieParser());
 
 
-// routes import
+// ==================== ROUTES IMPORT ====================
 
 import userRouter from "./routes/user.routes.js";
 import authRouter from "./routes/auth.routes.js";
@@ -32,36 +39,76 @@ import conversationRouter from "./routes/conversation.routes.js";
 import shareRouter from "./routes/share.routes.js";
 import conversationMemberRouter from "./routes/conversationMember.routes.js";
 import messageRouter from "./routes/message.routes.js";
+import messageReactionRouter from "./routes/messageReaction.routes.js";
+import blockUserRouter from "./routes/blockUser.routes.js";
+import adminRouter from "./routes/admin.routes.js";
+
+import reportRouter from "./routes/report.routes.js";
+import userReportRouter from "./routes/userReport.routes.js";
+
+import copyrightClaimRouter from "./routes/copyrightClaim.routes.js";
 
 
-// routes declaration
+// ==================== ROUTES DECLARATION ====================
 
 app.use("/api/v1/users", userRouter);
+
+app.use("/api/v1/users/block", blockUserRouter);
+
 app.use("/api/v1/auth", authRouter);
+
 app.use("/api/v1/videos", videoRouter);
+
 app.use("/api/v1/likes", likeRouter);
+
 app.use("/api/v1/comments", commentRouter);
+
 app.use("/api/v1/subscribes", subscribeRouter);
+
 app.use("/api/v1/watch-history", watchHistoryRouter);
+
 app.use("/api/v1/playlists", playlistRouter);
+
 app.use("/api/v1/conversations", conversationRouter);
+
 app.use("/api/v1/shares", shareRouter);
-app.use("/api/v1/conversation-members", conversationMemberRouter);
+
+app.use(
+    "/api/v1/conversation-members",
+    conversationMemberRouter
+);
+
 app.use("/api/v1/messages", messageRouter);
 
-// 404 handler
+app.use("/api/v1/message-reactions", messageReactionRouter);
+
+app.use("/api/v1/admin", adminRouter);
+
+
+// ==================== REPORT ROUTES ====================
+
+// Video Reports
+app.use("/api/v1/reports", reportRouter);
+
+app.use("/api/v1/user-reports", userReportRouter);
+
+// Copyright Claims
+app.use("/api/v1/copyright-claims", copyrightClaimRouter);
+
+
+// ==================== 404 HANDLER ====================
 
 app.use((req, res) => {
     return res.status(404).json({
         success: false,
         statusCode: 404,
         message: "Route not found",
-        errors: []
+        errors: [],
     });
 });
 
 
-// Global error handler
+// ==================== GLOBAL ERROR HANDLER ====================
 
 app.use((err, req, res, next) => {
     const statusCode = err.statusCode || 500;
@@ -70,8 +117,9 @@ app.use((err, req, res, next) => {
         success: false,
         statusCode,
         message: err.message || "Internal Server Error",
-        errors: err.errors || []
+        errors: err.errors || [],
     });
 });
+
 
 export default app;
