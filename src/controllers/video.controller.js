@@ -9,12 +9,15 @@ import { Video } from "../models/video.model.js";
 import { deleteFromCloudinary,uploadOnCloudinary } from "../utils/cloudinary.js";
 import { compressVideo } from "../utils/ffmpeg.js";
 import { BlockedUser } from "../models/blockedUser.model.js";
+import { Subscribe } from "../models/subscribe.model.js";
+import { Notification } from "../models/notification.model.js";
 
 const escapeRegex = (value) =>
     value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const isValidObjectId = (id) =>
     mongoose.Types.ObjectId.isValid(id);
+
 
 
 //================= publishAVideo ============================//
@@ -34,6 +37,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
 
         const videoFile = req.files?.videoFile?.[0];
         const thumbnail = req.files?.thumbnail?.[0];
+
         const userId = req.user?._id;
 
         if (!userId) {
@@ -113,17 +117,24 @@ const publishAVideo = asyncHandler(async (req, res) => {
                 .slice(2)}.mp4`
         );
 
+        //================ COMPRESS VIDEO =================//
+
         await compressVideo(
             videoFilePath,
             compressedVideoPath
         );
+
+        //================ UPLOAD VIDEO =================//
 
         const videoUpload =
             await uploadOnCloudinary(
                 compressedVideoPath
             );
 
-        if (!videoUpload?.secure_url || !videoUpload?.public_id) {
+        if (
+            !videoUpload?.secure_url ||
+            !videoUpload?.public_id
+        ) {
             throw new ApiError(
                 500,
                 "Video upload failed"
@@ -132,6 +143,8 @@ const publishAVideo = asyncHandler(async (req, res) => {
 
         uploadedVideoPublicId =
             videoUpload.public_id;
+
+        //================ UPLOAD THUMBNAIL =================//
 
         const thumbnailUpload =
             await uploadOnCloudinary(
@@ -151,6 +164,8 @@ const publishAVideo = asyncHandler(async (req, res) => {
         uploadedThumbnailPublicId =
             thumbnailUpload.public_id;
 
+        //================ VIDEO DURATION =================//
+
         const duration = Number(
             videoUpload.duration
         );
@@ -165,19 +180,93 @@ const publishAVideo = asyncHandler(async (req, res) => {
             );
         }
 
+        //================ CREATE VIDEO =================//
+
         const createdVideo = await Video.create({
-            videoFile: videoUpload.secure_url,
-            thumbnail: thumbnailUpload.secure_url,
-            videoPublicId: videoUpload.public_id,
-            thumbnailPublicId: thumbnailUpload.public_id,
-            title: trimmedTitle,
-            description: trimmedDescription,
+
+            videoFile:
+                videoUpload.secure_url,
+
+            thumbnail:
+                thumbnailUpload.secure_url,
+
+            videoPublicId:
+                videoUpload.public_id,
+
+            thumbnailPublicId:
+                thumbnailUpload.public_id,
+
+            title:
+                trimmedTitle,
+
+            description:
+                trimmedDescription,
+
             duration,
-            owner: userId
+
+            owner:
+                userId
         });
 
+        //==================================================//
+        // 🔔 NOTIFICATION HOOK
+        // Notify all subscribers about new video
+        //==================================================//
+
+        const subscribers = await Subscribe.find({
+            channel: userId
+        }).select("subscriber");
+
+        if (subscribers.length > 0) {
+
+            const notifications =
+                subscribers.map((subscription) => ({
+
+                    recipient:
+                        subscription.subscriber,
+
+                    actor:
+                        userId,
+
+                    type:
+                        "system",
+
+                    title:
+                        "New Video Published",
+
+                    message:
+                        `${req.user.username} published a new video: ${createdVideo.title}`,
+
+                    entityType:
+                        "video",
+
+                    entityId:
+                        createdVideo._id,
+
+                    data: {
+                        videoId:
+                            createdVideo._id,
+
+                        videoTitle:
+                            createdVideo.title,
+
+                        videoThumbnail:
+                            createdVideo.thumbnail
+                    }
+                }));
+
+            await Notification.insertMany(
+                notifications
+            );
+        }
+
+        //==================================================//
+
+        // Database me video successfully save ho gaya
         uploadedVideoPublicId = null;
         uploadedThumbnailPublicId = null;
+
+        //================ SUCCESS RESPONSE =================//
 
         return res
             .status(201)
@@ -191,13 +280,19 @@ const publishAVideo = asyncHandler(async (req, res) => {
 
     } finally {
 
+        //================ CLEANUP VIDEO =================//
+
         if (uploadedVideoPublicId) {
+
             try {
+
                 await deleteFromCloudinary(
                     uploadedVideoPublicId,
                     "video"
                 );
+
             } catch (error) {
+
                 console.error(
                     "Failed to cleanup uploaded video:",
                     error
@@ -205,13 +300,19 @@ const publishAVideo = asyncHandler(async (req, res) => {
             }
         }
 
+        //================ CLEANUP THUMBNAIL =================//
+
         if (uploadedThumbnailPublicId) {
+
             try {
+
                 await deleteFromCloudinary(
                     uploadedThumbnailPublicId,
                     "image"
                 );
+
             } catch (error) {
+
                 console.error(
                     "Failed to cleanup uploaded thumbnail:",
                     error
@@ -219,13 +320,21 @@ const publishAVideo = asyncHandler(async (req, res) => {
             }
         }
 
+        //================ REMOVE ORIGINAL VIDEO =================//
+
         if (videoFilePath) {
+
             try {
+
                 await fs.promises.rm(
                     videoFilePath,
-                    { force: true }
+                    {
+                        force: true
+                    }
                 );
+
             } catch (error) {
+
                 console.error(
                     "Failed to remove video temp file:",
                     error
@@ -233,13 +342,21 @@ const publishAVideo = asyncHandler(async (req, res) => {
             }
         }
 
+        //================ REMOVE COMPRESSED VIDEO =================//
+
         if (compressedVideoPath) {
+
             try {
+
                 await fs.promises.rm(
                     compressedVideoPath,
-                    { force: true }
+                    {
+                        force: true
+                    }
                 );
+
             } catch (error) {
+
                 console.error(
                     "Failed to remove compressed video temp file:",
                     error
@@ -247,13 +364,21 @@ const publishAVideo = asyncHandler(async (req, res) => {
             }
         }
 
+        //================ REMOVE THUMBNAIL =================//
+
         if (thumbnailPath) {
+
             try {
+
                 await fs.promises.rm(
                     thumbnailPath,
-                    { force: true }
+                    {
+                        force: true
+                    }
                 );
+
             } catch (error) {
+
                 console.error(
                     "Failed to remove thumbnail temp file:",
                     error
@@ -954,6 +1079,7 @@ const incrementVideoViews = asyncHandler(async (req, res) => {
             )
         );
 });
+
 
 
 //======================= togglePublishStatus ===========================//
