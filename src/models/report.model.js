@@ -66,7 +66,7 @@ const reportSchema = new mongoose.Schema(
     }
 );
 
-// Same user cannot report same video multiple times
+// Same user cannot report the same video multiple times
 reportSchema.index(
     {
         reporter: 1,
@@ -77,7 +77,7 @@ reportSchema.index(
     }
 );
 
-// Useful for admin/report management
+// Useful for admin moderation
 reportSchema.index({
     video: 1,
     status: 1,
@@ -87,4 +87,6 @@ reportSchema.index({
     createdAt: -1,
 });
 
-export const Report = mongoose.model("Report", reportSchema);
+export const Report =
+    mongoose.models.Report ||
+    mongoose.model("Report", reportSchema);
