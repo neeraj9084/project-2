@@ -60,8 +60,7 @@ const subscribeToChannel = asyncHandler(async (req, res) => {
         throw new ApiError(500, "Failed to subscribe to channel");
     }
 
-    //==================== NOTIFICATION HOOK ====================//
-
+ try {
     await Notification.create({
         recipient: channelId,
         actor: req.user._id,
@@ -75,8 +74,12 @@ const subscribeToChannel = asyncHandler(async (req, res) => {
             channelId: channelId
         }
     });
-
-    //===========================================================//
+} catch (error) {
+    console.error(
+        "Failed to create subscription notification:",
+        error.message
+    );
+}
 
     return res
         .status(201)
