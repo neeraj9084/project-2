@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 
 import { Report } from "../models/report.model.js";
 import { Video } from "../models/video.model.js";
+import { User } from "../models/user.model.js";
+import { Notification } from "../models/notification.model.js";
 
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
@@ -27,7 +29,7 @@ const reportVideo = asyncHandler(async (req, res) => {
 
     // Check video exists
     const video = await Video.findById(videoId)
-        .select("_id owner")
+        .select("_id owner title thumbnail")
         .lean();
 
     if (!video) {
@@ -59,6 +61,47 @@ const reportVideo = asyncHandler(async (req, res) => {
         }
 
         throw error;
+    }
+
+    // ====================== ADMIN NOTIFICATION ======================
+
+    try {
+        // Find all active admins
+        const admins = await User.find({
+            isAdmin: true,
+            isActive: true
+        }).select("_id");
+
+        if (admins.length > 0) {
+
+            const notifications = admins.map((admin) => ({
+                recipient: admin._id,
+                actor: reporterId,
+                type: "report_update",
+                title: "New Video Report",
+                message: `${req.user.username} reported the video "${video.title}".`,
+                entityType: "report",
+                entityId: report._id,
+                data: {
+                    reportId: report._id,
+                    videoId: video._id,
+                    videoTitle: video.title,
+                    videoThumbnail: video.thumbnail,
+                    reporterId,
+                    reason: report.reason,
+                    status: report.status,
+                    action: "video_report_created"
+                }
+            }));
+
+            await Notification.insertMany(notifications);
+        }
+
+    } catch (error) {
+        console.error(
+            "Failed to create video report notification:",
+            error.message
+        );
     }
 
     return res.status(201).json(

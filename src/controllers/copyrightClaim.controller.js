@@ -6,10 +6,12 @@ import { Video } from "../models/video.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { Notification } from "../models/notification.model.js";
 
 //=========================== submitCopyrightClaim ===========================
 
 const submitCopyrightClaim = asyncHandler(async (req, res) => {
+
     const claimantId = req.user._id;
     const { videoId } = req.params;
     const { reason, description } = req.body || {};
@@ -97,6 +99,7 @@ const submitCopyrightClaim = asyncHandler(async (req, res) => {
             description: trimmedDescription,
         });
     } catch (error) {
+
         if (error?.code === 11000) {
             throw new ApiError(
                 409,
@@ -105,6 +108,33 @@ const submitCopyrightClaim = asyncHandler(async (req, res) => {
         }
 
         throw error;
+    }
+
+    // 🔔 Notify video owner
+    try {
+        await Notification.create({
+            recipient: video.owner,
+            actor: claimantId,
+            type: "system",
+            title: "New Copyright Claim",
+            message: `A copyright claim has been submitted against your video "${video.title}".`,
+            entityType: "video",
+            entityId: video._id,
+            data: {
+                claimId: claim._id,
+                videoId: video._id,
+                videoTitle: video.title,
+                claimantId,
+                reason: claim.reason,
+                status: claim.status,
+                action: "copyright_claim_submitted"
+            }
+        });
+    } catch (error) {
+        console.error(
+            "Failed to create copyright claim notification:",
+            error.message
+        );
     }
 
     return res.status(201).json(

@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 import { UserReport } from "../models/userReport.model.js";
 import { User } from "../models/user.model.js";
+import { Notification } from "../models/notification.model.js";
 
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
@@ -19,7 +20,7 @@ const reportUser = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Invalid user ID");
     }
 
-    // Validate reason
+    // Allowed report reasons
     const allowedReasons = [
         "spam",
         "harassment",
@@ -33,6 +34,7 @@ const reportUser = asyncHandler(async (req, res) => {
         "other",
     ];
 
+    // Validate reason
     if (!reason || !allowedReasons.includes(reason)) {
         throw new ApiError(400, "Invalid report reason");
     }
@@ -43,9 +45,9 @@ const reportUser = asyncHandler(async (req, res) => {
     }
 
     // Check reported user exists
-    const reportedUser = await User.exists({
-        _id: userId,
-    });
+    const reportedUser = await User.findById(userId)
+        .select("_id username fullName avatar isActive")
+        .lean();
 
     if (!reportedUser) {
         throw new ApiError(404, "User not found");
@@ -60,6 +62,7 @@ const reportUser = asyncHandler(async (req, res) => {
     let report;
 
     try {
+        // Create user report
         report = await UserReport.create({
             reporter: reporterId,
             reportType: "user",
@@ -78,6 +81,55 @@ const reportUser = asyncHandler(async (req, res) => {
 
         throw error;
     }
+
+    //=============================== Notify Admins ===============================//
+
+    try {
+        const admins = await User.find({
+            isAdmin: true,
+            isActive: true,
+        }).select("_id");
+
+        if (admins.length > 0) {
+            const notifications = admins.map((admin) => ({
+                recipient: admin._id,
+                actor: reporterId,
+                type: "report_update",
+
+                title: "New User Report",
+
+                message: `${req.user.username} reported the user "${reportedUser.username}".`,
+
+                entityType: "report",
+                entityId: report._id,
+
+                data: {
+                    reportId: report._id,
+                    reporterId: reporterId,
+                    reportedUserId: reportedUser._id,
+
+                    reportedUsername: reportedUser.username,
+                    reportedUserName: reportedUser.fullName,
+
+                    reason: report.reason,
+                    description: report.description,
+                    status: report.status,
+
+                    action: "user_report_created",
+                },
+            }));
+
+            await Notification.insertMany(notifications);
+        }
+    } catch (error) {
+        // Notification failure should not fail the report API
+        console.error(
+            "Failed to create user report notifications:",
+            error.message
+        );
+    }
+
+    //=============================== Response ===================================//
 
     return res.status(201).json(
         new ApiResponse(
@@ -117,6 +169,8 @@ const getMyReports = asyncHandler(async (req, res) => {
         )
     );
 });
+
+//=============================== Export ===================================//
 
 export {
     reportUser,
