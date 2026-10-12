@@ -1,19 +1,10 @@
 import PropTypes from "prop-types";
-import {
-  CalendarDays,
-  Camera,
-  Edit3,
-  Link as LinkIcon,
-  MapPin,
-  MoreHorizontal,
-  Verified,
-} from "lucide-react";
-
 import ProfileCover from "./ProfileCover";
 import ProfileAvatar from "./ProfileAvatar";
 import ProfileActions from "./ProfileActions";
 import ProfileInfo from "./ProfileInfo";
 import ProfileStats from "./ProfileStats";
+
 
 const DEFAULT_PROFILE = {
   fullName: "Neeraj Saini",

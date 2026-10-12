@@ -110,10 +110,11 @@ export default function Profile() {
     }
   }, []);
 
-  useEffect(() => {
-    loadProfile();
-    loadVideos();
-  }, [loadProfile, loadVideos]);
+useEffect(() => {
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  loadProfile();
+  loadVideos();
+}, [loadProfile, loadVideos]);
 
   // Automatically dismiss notifications.
   useEffect(() => {

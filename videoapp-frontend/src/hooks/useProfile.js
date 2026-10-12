@@ -75,9 +75,10 @@ function useProfile() {
     []
   );
 
-  useEffect(() => {
-    fetchProfile();
-  }, [fetchProfile]);
+useEffect(() => {
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  fetchProfile();
+}, [fetchProfile]);
 
   return {
     profile,

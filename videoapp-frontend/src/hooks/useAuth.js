@@ -16,9 +16,6 @@ function useAuth() {
   const auth = useAuthStore();
   const initializedRef = useRef(false);
 
-  // ----------------------------------
-  // LOGIN
-  // ----------------------------------
   const login = useCallback(async (loginData) => {
     authStore.setLoading(true);
 
@@ -41,23 +38,16 @@ function useAuth() {
     }
   }, []);
 
-  // ----------------------------------
-  // LOGOUT
-  // ----------------------------------
   const logout = useCallback(async () => {
     authStore.setLoading(true);
 
     try {
       await logoutUser();
     } finally {
-      // Backend fail hone par bhi local auth clear hoga
       authStore.clearAuth();
     }
   }, []);
 
-  // ----------------------------------
-  // GET CURRENT USER
-  // ----------------------------------
   const fetchCurrentUser = useCallback(async () => {
     const user = await getCurrentUser();
 
@@ -66,9 +56,6 @@ function useAuth() {
     return user;
   }, []);
 
-  // ----------------------------------
-  // REFRESH ACCESS TOKEN
-  // ----------------------------------
   const refreshAuth = useCallback(async () => {
     const data = await refreshAccessToken();
 
@@ -81,15 +68,11 @@ function useAuth() {
     return data.accessToken;
   }, []);
 
-  // ----------------------------------
-  // INITIALIZE AUTH
-  // ----------------------------------
   const initializeAuth = useCallback(async () => {
     if (authStore.getState().initialized) {
       return authStore.getState();
     }
 
-    // Prevent duplicate requests
     if (initializationPromise) {
       return initializationPromise;
     }
@@ -100,24 +83,17 @@ function useAuth() {
       try {
         const currentToken = authStore.getState().accessToken;
 
-        // --------------------------------
-        // 1. Existing access token
-        // --------------------------------
         if (currentToken) {
           try {
             await fetchCurrentUser();
-
             authStore.setInitialized(true);
 
             return authStore.getState();
-          } catch (error) {
-            // Token may have expired.
+          } catch {
+            // Existing access token may have expired.
           }
         }
 
-        // --------------------------------
-        // 2. Try refresh token cookie
-        // --------------------------------
         try {
           await refreshAuth();
           await fetchCurrentUser();
@@ -125,8 +101,7 @@ function useAuth() {
           authStore.setInitialized(true);
 
           return authStore.getState();
-        } catch (refreshError) {
-          // No valid session
+        } catch {
           authStore.clearAuth();
 
           return authStore.getState();
@@ -141,28 +116,22 @@ function useAuth() {
     return initializationPromise;
   }, [fetchCurrentUser, refreshAuth]);
 
-  // ----------------------------------
-  // INITIAL AUTH CHECK
-  // ----------------------------------
   useEffect(() => {
     if (initializedRef.current) {
       return;
     }
 
     initializedRef.current = true;
-
     initializeAuth();
   }, [initializeAuth]);
 
   return {
-    // State
     user: auth.user,
     accessToken: auth.accessToken,
     isAuthenticated: auth.isAuthenticated,
     loading: auth.loading,
     initialized: auth.initialized,
 
-    // Actions
     login,
     logout,
     fetchCurrentUser,
