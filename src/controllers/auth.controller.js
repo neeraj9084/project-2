@@ -5,6 +5,8 @@ import { User } from "../models/user.model.js";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { sendEmail } from "../utils/sendEmail.js";
+import { Notification } from "../models/notification.model.js";
+
 
 //-----------------------login--------------------------//
 
@@ -287,6 +289,31 @@ const  verifyChangedEmail = asyncHandler(async(req, res) => {
     await user.save({
          validateBeforeSave: false
     });
+
+    try {
+    await Notification.create({
+        recipient: user._id,
+        actor: user._id,
+        type: "system",
+
+        title: "Email Address Changed",
+
+        message: "Your email address has been changed successfully.",
+
+        entityType: "user",
+        entityId: user._id,
+
+        data: {
+            userId: user._id,
+            action: "email_changed"
+        }
+    });
+} catch (error) {
+    console.error(
+        "Failed to create email change notification:",
+        error.message
+    );
+}
    
     return res.status(200).json( 
         new ApiResponse(200, {}, "Email changed successfully")
@@ -595,6 +622,31 @@ const changePassword = asyncHandler(async (req, res) => {
 
     await user.save();
 
+    try {
+    await Notification.create({
+        recipient: user._id,
+        actor: user._id,
+        type: "system",
+
+        title: "Password Changed",
+
+        message: "Your password was changed successfully.",
+
+        entityType: "user",
+        entityId: user._id,
+
+        data: {
+            userId: user._id,
+            action: "password_changed"
+        }
+    });
+} catch (error) {
+    console.error(
+        "Failed to create password change notification:",
+        error.message
+    );
+}
+
     return res.status(200).json(
         new ApiResponse(
             200,
@@ -777,6 +829,7 @@ const verifyAccountRecovery = asyncHandler(async (req, res) => {
 
     // Check expiry
     if (user.accountRecoveryOtpExpiry < new Date()) {
+
         user.accountRecoveryOtp = undefined;
         user.accountRecoveryOtpExpiry = undefined;
         user.accountRecoveryOtpAttempts = 0;
@@ -793,14 +846,18 @@ const verifyAccountRecovery = asyncHandler(async (req, res) => {
 
     // Check OTP
     if (user.accountRecoveryOtp !== otp) {
+
         user.accountRecoveryOtpAttempts += 1;
 
         if (user.accountRecoveryOtpAttempts >= 5) {
+
             user.accountRecoveryOtp = undefined;
             user.accountRecoveryOtpExpiry = undefined;
             user.accountRecoveryOtpAttempts = 0;
 
-            await user.save({ validateBeforeSave: false });
+            await user.save({
+                validateBeforeSave: false
+            });
 
             throw new ApiError(
                 429,
@@ -808,7 +865,9 @@ const verifyAccountRecovery = asyncHandler(async (req, res) => {
             );
         }
 
-        await user.save({ validateBeforeSave: false });
+        await user.save({
+            validateBeforeSave: false
+        });
 
         throw new ApiError(
             400,
@@ -830,6 +889,28 @@ const verifyAccountRecovery = asyncHandler(async (req, res) => {
     await user.save({
         validateBeforeSave: false
     });
+
+    // 🔔 Account recovery notification
+    try {
+        await Notification.create({
+            recipient: user._id,
+            actor: user._id,
+            type: "system",
+            title: "Account Recovered",
+            message: "Your account has been successfully recovered.",
+            entityType: "user",
+            entityId: user._id,
+            data: {
+                userId: user._id,
+                action: "account_recovered"
+            }
+        });
+    } catch (error) {
+        console.error(
+            "Failed to create account recovery notification:",
+            error.message
+        );
+    }
 
     return res.status(200).json(
         new ApiResponse(
