@@ -3,10 +3,14 @@ import bcrypt from "bcrypt";
 
 const pendingUserSchema = new mongoose.Schema(
     {
+        // ==========================================
+        // BASIC USER INFORMATION
+        // ==========================================
+
         fullName: {
             type: String,
             required: true,
-            trim: true
+            trim: true,
         },
 
         email: {
@@ -14,7 +18,7 @@ const pendingUserSchema = new mongoose.Schema(
             required: true,
             lowercase: true,
             trim: true,
-            unique: true
+            unique: true,
         },
 
         username: {
@@ -22,58 +26,89 @@ const pendingUserSchema = new mongoose.Schema(
             required: true,
             lowercase: true,
             trim: true,
-            unique: true
+            unique: true,
         },
+
+        // ==========================================
+        // PASSWORD
+        // ==========================================
 
         password: {
             type: String,
-            required: true
+            required: false,
+            default: undefined,
         },
+
+        // ==========================================
+        // PROFILE IMAGES
+        // ==========================================
 
         avatar: {
             type: String,
-            required: true
+            default: "",
         },
 
         coverImage: {
             type: String,
-            default: ""
+            default: "",
         },
+
+        // ==========================================
+        // EMAIL VERIFICATION OTP
+        // ==========================================
 
         verificationOtp: {
             type: String,
-            required: true
+            default: null,
         },
 
         verificationOtpExpiry: {
             type: Date,
-            required: true
+            required: true,
         },
 
         verificationOtpAttempts: {
             type: Number,
-            default: 0
-        }
+            default: 0,
+        },
+
+        isEmailVerified: {
+            type: Boolean,
+            default: false,
+        },
     },
+
     {
-        timestamps: true
+        timestamps: true,
     }
 );
 
-// Password hash
-pendingUserSchema.pre("save", async function () {
+// ==========================================
+// PASSWORD HASH
+// ==========================================
 
-    if (!this.isModified("password")) {
+pendingUserSchema.pre("save", async function () {
+    if (!this.isModified("password") || !this.password) {
         return;
     }
 
-    this.password = await bcrypt.hash(this.password, 10);
+    this.password = await bcrypt.hash(
+        this.password,
+        10
+    );
 });
 
-// Pending user automatically delete after OTP expiry
+// ==========================================
+// AUTO DELETE EXPIRED REGISTRATION
+// ==========================================
+
 pendingUserSchema.index(
-    { verificationOtpExpiry: 1 },
-    { expireAfterSeconds: 0 }
+    {
+        verificationOtpExpiry: 1,
+    },
+    {
+        expireAfterSeconds: 0,
+    }
 );
 
 export const PendingUser = mongoose.model(

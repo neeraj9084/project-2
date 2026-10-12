@@ -11,7 +11,7 @@ const userSchema = new Schema(
             lowercase: true,
             trim: true,
             index: true,
-            match: /^[a-z0-9_@.]+$/
+            match: /^[a-z0-9_@.]+$/,
         },
 
         email: {
@@ -29,13 +29,23 @@ const userSchema = new Schema(
             index: true,
         },
 
-        avatar: {
+        bio: {
             type: String,
-            required: true,
+            trim: true,
+            maxlength: 150,
+            default: "",
         },
 
+        // Avatar optional hai
+        avatar: {
+            type: String,
+            default: "",
+        },
+
+        // Cover optional hai
         coverImage: {
             type: String,
+            default: "",
         },
 
         watchHistory: [
@@ -56,90 +66,90 @@ const userSchema = new Schema(
 
         isVerified: {
             type: Boolean,
-            default: false
+            default: false,
         },
 
         verificationOtp: {
-            type: String
+            type: String,
         },
 
         verificationOtpExpiry: {
-            type: Date
+            type: Date,
         },
 
         verificationOtpAttempts: {
             type: Number,
-            default: 0
+            default: 0,
         },
 
         newEmail: {
-            type: String
+            type: String,
         },
 
         changeEmail: {
-            type: String
+            type: String,
         },
 
         emailChangeOtp: {
-            type: String
+            type: String,
         },
 
         emailChangeOtpExpiry: {
-            type: Date
+            type: Date,
         },
 
         emailChangeOtpAttempts: {
             type: Number,
-            default: 0
+            default: 0,
         },
 
         passwordResetToken: {
-            type: String
+            type: String,
         },
 
         forgotPasswordOtp: {
-            type: String
+            type: String,
         },
 
         forgotPasswordOtpExpiry: {
-            type: Date
+            type: Date,
         },
 
         forgotPasswordOtpAttempts: {
             type: Number,
-            default: 0
+            default: 0,
         },
 
         accountRecoveryOtp: {
-            type: String
+            type: String,
         },
 
         accountRecoveryOtpExpiry: {
-            type: Date
+            type: Date,
         },
 
         accountRecoveryOtpAttempts: {
             type: Number,
-            default: 0
+            default: 0,
         },
 
         isActive: {
             type: Boolean,
-            default: true
+            default: true,
         },
-        role: {
-    type: String,
-    enum: ["user", "admin"],
-    default: "user",
-},
-    },
 
+        role: {
+            type: String,
+            enum: ["user", "admin"],
+            default: "user",
+        },
+    },
     {
         timestamps: true,
     }
 );
 
-userSchema.pre("save", async function (next) {
+userSchema.pre("save", async function () {
     if (!this.isModified("password")) {
         return;
     }
@@ -162,11 +172,11 @@ userSchema.methods.generateAccessToken = function () {
             email: this.email,
             username: this.username,
             fullName: this.fullName,
-            role: this.role
+            role: this.role,
         },
         process.env.ACCESS_TOKEN_SECRET,
         {
-            expiresIn: process.env.ACCESS_TOKEN_EXPIRY
+            expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
         }
     );
 };
@@ -178,7 +188,7 @@ userSchema.methods.generateRefreshToken = function () {
         },
         process.env.REFRESH_TOKEN_SECRET,
         {
-            expiresIn: process.env.REFRESH_TOKEN_EXPIRY
+            expiresIn: process.env.REFRESH_TOKEN_EXPIRY,
         }
     );
 };

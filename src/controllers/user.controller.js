@@ -6,44 +6,50 @@ import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { sendEmail } from "../utils/sendEmail.js";
 import crypto from "crypto";
+import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
+import { Subscribe } from "../models/subscribe.model.js";
+import { Video } from "../models/video.model.js";
+//====================== startRegistration ======================//
 
-//====================== registerUser ======================//
-
-const registeUser = asyncHandler(async (req, res) => {
-
+const startRegistration = asyncHandler(async (req, res) => {
     const {
         fullName,
-        email,
         username,
-        password
+        email,
     } = req.body;
 
-   if (
-  ![fullName, email, username, password].every(
-    (field) => typeof field === "string" && field.trim()
-  )
-) {
-  throw new ApiError(400, "All fields are required");
-}
-
-    const normalizedEmail = email.toLowerCase();
-    const normalizedUsername = username.toLowerCase();
-
-    // Username validation
-    const checkUsername = /^(?=.*[0-9])[a-z0-9_@.]+$/;
-
-    if (!checkUsername.test(normalizedUsername)) {
+    if (
+        ![fullName, username, email].every(
+            (field) => typeof field === "string" && field.trim()
+        )
+    ) {
         throw new ApiError(
             400,
-            "Username can only contain letters, numbers, _, @ and . and must contain at least one number"
-        );    }
+            "Full name, username and email are required"
+        );
+    }
+
+    const normalizedFullName = fullName.trim();
+    const normalizedUsername = username.trim().toLowerCase();
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Username validation
+    const usernameRegex = /^(?=.*[0-9])[a-z0-9_@.]+$/;
+
+    if (!usernameRegex.test(normalizedUsername)) {
+        throw new ApiError(
+            400,
+            "Username can only contain lowercase letters, numbers, _, @ and . and must contain at least one number"
+        );
+    }
 
     // Check already registered user
     const existedUser = await User.findOne({
         $or: [
             { email: normalizedEmail },
-            { username: normalizedUsername }
-        ]
+            { username: normalizedUsername },
+        ],
     });
 
     if (existedUser) {
@@ -53,113 +59,64 @@ const registeUser = asyncHandler(async (req, res) => {
         );
     }
 
-    // Check pending registration
-    const pendingUser = await PendingUser.findOne({
+    // Remove any old pending registration
+    await PendingUser.deleteMany({
         $or: [
             { email: normalizedEmail },
-            { username: normalizedUsername }
-        ]
+            { username: normalizedUsername },
+        ],
     });
 
-    if (pendingUser) {
-        throw new ApiError(
-            409,
-            "Email or username verification is already pending. Please verify OTP or resend OTP."
-        );
-    }
-
-    // Avatar path
-    let avatarLocalPath;
-
-    if (
-        req.files &&
-        Array.isArray(req.files.avatar) &&
-        req.files.avatar.length > 0
-    ) {
-        avatarLocalPath = req.files.avatar[0].path;
-    }
-
-    // Cover image path
-    let coverImageLocalPath;
-
-    if (
-        req.files &&
-        Array.isArray(req.files.coverImage) &&
-        req.files.coverImage.length > 0
-    ) {
-        coverImageLocalPath = req.files.coverImage[0].path;
-    }
-
-    if (!avatarLocalPath) {
-        throw new ApiError(
-            400,
-            "Avatar file is required"
-        );
-    }
-
-    // Upload avatar
-    const avatar = await uploadOnCloudinary(
-        avatarLocalPath
-    );
-
-    if (!avatar) {
-        throw new ApiError(
-            400,
-            "Avatar upload failed"
-        );
-    }
-
-    // Upload cover image
-    const coverImage = coverImageLocalPath
-        ? await uploadOnCloudinary(coverImageLocalPath)
-        : null;
-
     // Generate OTP
-    const otp = crypto.randomInt(100000, 1000000).toString();
+    const otp = crypto
+        .randomInt(100000, 1000000)
+        .toString();
 
     const otpExpiry = new Date(
         Date.now() + 10 * 60 * 1000
     );
 
-    // Create temporary user
+    // Create pending registration
     await PendingUser.create({
-        fullName,
+        fullName: normalizedFullName,
         email: normalizedEmail,
         username: normalizedUsername,
-        password,
-        avatar: avatar.url,
-        coverImage: coverImage?.url || "",
+
+        password: undefined,
+
+        avatar: "",
+        coverImage: "",
+
         verificationOtp: otp,
         verificationOtpExpiry: otpExpiry,
-        verificationOtpAttempts: 0
+        verificationOtpAttempts: 0,
+
+        isEmailVerified: false,
     });
 
     // Send OTP
     await sendEmail({
         to: normalizedEmail,
-        subject: "Verify your email",
-        text: `Your verification OTP is ${otp}. This OTP will expire in 10 minutes.`
+        subject: "Verify your VideoApp account",
+        text: `Your VideoApp verification OTP is ${otp}. This OTP will expire in 10 minutes.`,
     });
-
-    
 
     return res.status(201).json(
         new ApiResponse(
             201,
-            {},
-            "Registration successful. Please verify your email."
+            {
+                email: normalizedEmail,
+            },
+            "OTP sent successfully"
         )
     );
 });
 
-//====================== verifyEmail ======================//
+//====================== verifyRegistrationOtp ======================//
 
-const verifyEmail = asyncHandler(async (req, res) => {
+const verifyRegistrationOtp = asyncHandler(async (req, res) => {
 
-    const {
-        email,
-        otp
-    } = req.body;
+    const { email, otp } = req.body;
 
     if (!email || !otp) {
         throw new ApiError(
@@ -168,9 +125,9 @@ const verifyEmail = asyncHandler(async (req, res) => {
         );
     }
 
-    const normalizedEmail = email.toLowerCase();
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedOtp = otp.toString().trim();
 
-    // Find temporary user
     const pendingUser = await PendingUser.findOne({
         email: normalizedEmail
     });
@@ -182,8 +139,17 @@ const verifyEmail = asyncHandler(async (req, res) => {
         );
     }
 
-    // Check OTP expiry
+    // Already verified
+    if (pendingUser.isEmailVerified) {
+        throw new ApiError(
+            400,
+            "Email is already verified"
+        );
+    }
+
+    // OTP expiry
     if (
+        !pendingUser.verificationOtpExpiry ||
         pendingUser.verificationOtpExpiry < new Date()
     ) {
         await PendingUser.deleteOne({
@@ -196,16 +162,17 @@ const verifyEmail = asyncHandler(async (req, res) => {
         );
     }
 
-    // Check OTP
-    if (pendingUser.verificationOtp !== otp) {
+    // OTP check
+    if (pendingUser.verificationOtp !== normalizedOtp) {
+
         pendingUser.verificationOtpAttempts += 1;
 
+        // 5 wrong attempts
         if (pendingUser.verificationOtpAttempts >= 5) {
-            pendingUser.verificationOtp = undefined;
-            pendingUser.verificationOtpExpiry = undefined;
-            pendingUser.verificationOtpAttempts = 0;
 
-            await pendingUser.save();
+            await PendingUser.deleteOne({
+                _id: pendingUser._id
+            });
 
             throw new ApiError(
                 429,
@@ -221,12 +188,129 @@ const verifyEmail = asyncHandler(async (req, res) => {
         );
     }
 
-    // Final check before creating actual user
+    // OTP correct
+    pendingUser.isEmailVerified = true;
+
+    // Clear OTP
+    pendingUser.verificationOtp = null;
+
+    // Keep registration alive for password completion
+    pendingUser.verificationOtpExpiry = new Date(
+        Date.now() + 10 * 60 * 1000
+    );
+
+    pendingUser.verificationOtpAttempts = 0;
+
+    await pendingUser.save();
+
+    // Registration completion token
+    const registrationToken = jwt.sign(
+        {
+            _id: pendingUser._id,
+            purpose: "registration-completion"
+        },
+        process.env.ACCESS_TOKEN_SECRET,
+        {
+            expiresIn: "10m"
+        }
+    );
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                registrationToken,
+                email: normalizedEmail
+            },
+            "Email verified successfully"
+        )
+    );
+});
+
+//====================== completeRegistration ======================//
+
+const completeRegistration = asyncHandler(async (req, res) => {
+    const {
+        registrationToken,
+        password,
+        confirmPassword,
+    } = req.body;
+
+    if (
+        !registrationToken ||
+        !password ||
+        !confirmPassword
+    ) {
+        throw new ApiError(
+            400,
+            "Registration token, password and confirm password are required"
+        );
+    }
+
+    if (password !== confirmPassword) {
+        throw new ApiError(
+            400,
+            "Password and confirm password do not match"
+        );
+    }
+
+    if (password.length < 8) {
+        throw new ApiError(
+            400,
+            "Password must be at least 8 characters"
+        );
+    }
+
+    // Verify registration token
+    let decodedToken;
+
+    try {
+        decodedToken = jwt.verify(
+            registrationToken,
+            process.env.ACCESS_TOKEN_SECRET
+        );
+    } catch (error) {
+        throw new ApiError(
+            401,
+            "Registration session expired. Please start again."
+        );
+    }
+
+    if (
+        decodedToken?.purpose !== "registration-completion" ||
+        !decodedToken?._id
+    ) {
+        throw new ApiError(
+            401,
+            "Invalid registration token"
+        );
+    }
+
+    // Find pending user
+    const pendingUser = await PendingUser.findById(
+        decodedToken._id
+    );
+
+    if (!pendingUser) {
+        throw new ApiError(
+            404,
+            "Registration session not found or expired"
+        );
+    }
+
+    if (!pendingUser.isEmailVerified) {
+        throw new ApiError(
+            403,
+            "Please verify your email first"
+        );
+    }
+
+    // Final duplicate check
     const existedUser = await User.findOne({
         $or: [
             { email: pendingUser.email },
-            { username: pendingUser.username }
-        ]
+            { username: pendingUser.username },
+        ],
     });
 
     if (existedUser) {
@@ -236,27 +320,35 @@ const verifyEmail = asyncHandler(async (req, res) => {
         );
     }
 
-    // Create actual verified user
+    // Create actual user
     const user = await User.create({
         fullName: pendingUser.fullName,
         email: pendingUser.email,
         username: pendingUser.username,
-        password: pendingUser.password,
-        avatar: pendingUser.avatar,
-        coverImage: pendingUser.coverImage,
-        isVerified: true
+
+        password,
+
+        // Optional profile images
+        avatar: pendingUser.avatar || "",
+        coverImage: pendingUser.coverImage || "",
+
+        isVerified: true,
     });
 
-    // Delete temporary user
+    // Delete pending registration
     await PendingUser.deleteOne({
-        _id: pendingUser._id
+        _id: pendingUser._id,
     });
 
-    return res.status(200).json(
+    const safeUser = await User.findById(user._id).select(
+        "-password -refreshToken"
+    );
+
+    return res.status(201).json(
         new ApiResponse(
-            200,
-            {},
-            "Email verified and account created successfully"
+            201,
+            safeUser,
+            "Account created successfully. Please login."
         )
     );
 });
@@ -264,23 +356,22 @@ const verifyEmail = asyncHandler(async (req, res) => {
 //====================== resendVerificationOtp ======================//
 
 const resendVerificationOtp = asyncHandler(async (req, res) => {
+    const { email } = req.body;
 
-    const {
-        email
-    } = req.body;
-
-    if (!email) {
+    // Email required
+    if (!email || typeof email !== "string" || !email.trim()) {
         throw new ApiError(
             400,
             "Email is required"
         );
     }
 
-    const normalizedEmail = email.toLowerCase();
+    // Normalize email
+    const normalizedEmail = email.trim().toLowerCase();
 
     // Find pending registration
     const pendingUser = await PendingUser.findOne({
-        email: normalizedEmail
+        email: normalizedEmail,
     });
 
     if (!pendingUser) {
@@ -290,14 +381,25 @@ const resendVerificationOtp = asyncHandler(async (req, res) => {
         );
     }
 
-    // Generate new OTP
-    const otp = crypto.randomInt(100000, 1000000).toString();
+    // Email already verified
+    if (pendingUser.isEmailVerified) {
+        throw new ApiError(
+            400,
+            "Email is already verified. Please complete your registration."
+        );
+    }
 
+    // Generate new 6 digit OTP
+    const otp = crypto
+        .randomInt(100000, 1000000)
+        .toString();
+
+    // OTP valid for 10 minutes
     const otpExpiry = new Date(
         Date.now() + 10 * 60 * 1000
     );
 
-    // Update OTP
+    // Update OTP details
     pendingUser.verificationOtp = otp;
     pendingUser.verificationOtpExpiry = otpExpiry;
     pendingUser.verificationOtpAttempts = 0;
@@ -307,14 +409,16 @@ const resendVerificationOtp = asyncHandler(async (req, res) => {
     // Send new OTP
     await sendEmail({
         to: normalizedEmail,
-        subject: "Your new verification OTP",
-        text: `Your new verification OTP is ${otp}. This OTP will expire in 10 minutes.`
+        subject: "Your new VideoApp verification OTP",
+        text: `Your new VideoApp verification OTP is ${otp}. This OTP will expire in 10 minutes.`,
     });
 
     return res.status(200).json(
         new ApiResponse(
             200,
-            {},
+            {
+                email: normalizedEmail,
+            },
             "Verification OTP sent successfully"
         )
     );
@@ -323,10 +427,13 @@ const resendVerificationOtp = asyncHandler(async (req, res) => {
 //====================== updateAccountDetails ==========================//
 
 const updateAccountDetails = asyncHandler(async (req, res) => {
+    const { fullName, username, bio } = req.body;
 
-    const { fullName, username } = req.body;
-
-    if (!fullName?.trim() && !username?.trim()) {
+    if (
+        !fullName?.trim() &&
+        !username?.trim() &&
+        bio === undefined
+    ) {
         throw new ApiError(
             400,
             "At least one field is required"
@@ -342,14 +449,11 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
         );
     }
 
-    // Update full name
     if (fullName?.trim()) {
         user.fullName = fullName.trim();
     }
 
-    // Update username
     if (username?.trim()) {
-
         const normalizedUsername = username
             .trim()
             .toLowerCase();
@@ -377,6 +481,19 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
         }
 
         user.username = normalizedUsername;
+    }
+
+    if (bio !== undefined) {
+        const trimmedBio = bio.trim();
+
+        if (trimmedBio.length > 150) {
+            throw new ApiError(
+                400,
+                "Bio cannot exceed 150 characters"
+            );
+        }
+
+        user.bio = trimmedBio;
     }
 
     await user.save();
@@ -472,15 +589,49 @@ return res.status(200).json(new ApiResponse(200, updatedUser,
 //===================== getCurrentUser =========================//
 
 const getCurrentUser = asyncHandler(async (req, res) => {
+    const userId = req.user._id;
+
+    const [followers, following, videos] = await Promise.all([
+        Subscribe.countDocuments({
+            channel: userId
+        }),
+
+        Subscribe.countDocuments({
+            subscriber: userId
+        }),
+
+        Video.countDocuments({
+            owner: userId,
+            isPublished: true
+        })
+    ]);
+
+    const user = await User.findById(userId).select(
+        "_id username email fullName bio avatar coverImage isVerified isActive role createdAt"
+    );
+
+    if (!user) {
+        throw new ApiError(
+            404,
+            "User not found"
+        );
+    }
 
     return res.status(200).json(
         new ApiResponse(
             200,
-            req.user,
+            {
+                user,
+                stats: {
+                    videos,
+                    followers,
+                    following
+                },
+                isOwnProfile: true
+            },
             "Current user fetched successfully"
         )
     );
-
 });
 
 //------------------ changeUsername -----------------------//
@@ -548,13 +699,117 @@ const changeUsername = asyncHandler(async (req, res) => {
         );
 });
 
+//======================= getPublicProfile ============================//
+
+const getPublicProfile = asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+        throw new ApiError(
+            400,
+            "Invalid user ID"
+        );
+    }
+
+    const user = await User.findById(userId).select(
+        "_id username fullName bio avatar coverImage isVerified createdAt"
+    );
+
+    if (!user) {
+        throw new ApiError(
+            404,
+            "User not found"
+        );
+    }
+
+    const page = Math.max(
+        Number(req.query.page) || 1,
+        1
+    );
+
+    const limit = Math.min(
+        Math.max(Number(req.query.limit) || 12, 1),
+        50
+    );
+
+    const skip = (page - 1) * limit;
+
+    const [followers, following, totalVideos, videos, isFollowing] =
+        await Promise.all([
+            Subscribe.countDocuments({
+                channel: userId
+            }),
+
+            Subscribe.countDocuments({
+                subscriber: userId
+            }),
+
+            Video.countDocuments({
+                owner: userId,
+                isPublished: true
+            }),
+
+            Video.find({
+                owner: userId,
+                isPublished: true
+            })
+                .select(
+                    "_id thumbnail title duration views createdAt"
+                )
+                .sort({
+                    createdAt: -1
+                })
+                .skip(skip)
+                .limit(limit),
+
+            Subscribe.exists({
+                subscriber: req.user._id,
+                channel: userId
+            })
+        ]);
+
+    const totalPages = Math.ceil(
+        totalVideos / limit
+    );
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                user,
+                stats: {
+                    videos: totalVideos,
+                    followers,
+                    following
+                },
+                isFollowing: !!isFollowing,
+                isOwnProfile:
+                    req.user._id.toString() === userId,
+                videos,
+                pagination: {
+                    currentPage: page,
+                    limit,
+                    totalVideos,
+                    totalPages,
+                    hasNextPage: page < totalPages,
+                    hasPreviousPage: page > 1
+                }
+            },
+            "Public profile fetched successfully"
+        )
+    );
+});
+
 export {
-    registeUser,
-    verifyEmail,
+    startRegistration,
+    verifyRegistrationOtp,
+    completeRegistration,
     resendVerificationOtp,
-     updateAccountDetails,
-      updateAvatar,
-      updateCoverImage,
-       getCurrentUser,
-        changeUsername
+
+    updateAccountDetails,
+    updateAvatar,
+    updateCoverImage,
+    getCurrentUser,
+    changeUsername,
+    getPublicProfile
 };
