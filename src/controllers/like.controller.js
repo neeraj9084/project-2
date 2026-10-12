@@ -203,7 +203,6 @@ const getVideoLikeCount = asyncHandler(async (req, res) => {
 // ================= getMyLikedVideos ================== //
 
 const getMyLikedVideos = asyncHandler(async (req, res) => {
-
     const likes = await Like.find({
         likedBy: req.user._id
     })
