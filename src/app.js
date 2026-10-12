@@ -47,6 +47,10 @@ import reportRouter from "./routes/report.routes.js";
 import userReportRouter from "./routes/userReport.routes.js";
 
 import copyrightClaimRouter from "./routes/copyrightClaim.routes.js";
+import notificationRouter from "./routes/notification.route.js";
+import momentRouter from "./routes/moment.routes.js";
+import musicRouter from "./routes/music.routes.js";
+
 
 
 // ==================== ROUTES DECLARATION ====================
@@ -83,6 +87,16 @@ app.use("/api/v1/messages", messageRouter);
 app.use("/api/v1/message-reactions", messageReactionRouter);
 
 app.use("/api/v1/admin", adminRouter);
+app.use("/api/v1/notifications", notificationRouter);
+app.use(
+    "/api/v1/moments",
+    momentRouter
+);
+
+app.use(
+    "/api/v1/music",
+    musicRouter
+);
 
 
 // ==================== REPORT ROUTES ====================
