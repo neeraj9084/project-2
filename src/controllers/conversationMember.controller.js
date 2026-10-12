@@ -1,16 +1,25 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
+
 import { ConversationMember } from "../models/conversationMember.model.js";
-import { Conversation } from "../models/conversation.model.js"; 
+
+import { Conversation } from "../models/conversation.model.js";
+
 import mongoose from "mongoose";
+
 import { ApiError } from "../utils/ApiError.js";
+
 import { ApiResponse } from "../utils/ApiResponse.js";
+
 import { User } from "../models/user.model.js";
+
 import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
+import { Notification } from "../models/notification.model.js";
 
 //===================== createMemberConversation =======================//
 
 const createMemberConversation = asyncHandler(async (req, res) => {
+
     const { participantIds, name, avatar } = req.body;
 
     const currentUserId = req.user?._id;
@@ -60,6 +69,7 @@ const createMemberConversation = asyncHandler(async (req, res) => {
     }
 
     for (const participantId of uniqueParticipantIds) {
+
         if (participantId.toString() === currentUserId.toString()) {
             continue;
         }
@@ -108,6 +118,7 @@ const createMemberConversation = asyncHandler(async (req, res) => {
 //====================== AddConversationMember ======================//
 
 const addConversationMember = asyncHandler(async (req, res) => {
+
     const { conversationId } = req.params;
     const { userId } = req.body;
 
@@ -154,7 +165,7 @@ const addConversationMember = asyncHandler(async (req, res) => {
     const user = await User.findOne({
         _id: userId,
         isActive: true
-    }).select("_id");
+    }).select("_id username");
 
     if (!user) {
         throw new ApiError(404, "User not found or inactive");
@@ -178,6 +189,7 @@ const addConversationMember = asyncHandler(async (req, res) => {
     });
 
     if (existingMember) {
+
         if (existingMember.isActive) {
             throw new ApiError(
                 409,
@@ -191,11 +203,38 @@ const addConversationMember = asyncHandler(async (req, res) => {
 
         await existingMember.save();
 
-        if (!conversation.participants.some(
-            (participantId) => participantId.toString() === userId.toString()
-        )) {
+        if (
+            !conversation.participants.some(
+                (participantId) =>
+                    participantId.toString() === userId.toString()
+            )
+        ) {
             conversation.participants.push(userId);
             await conversation.save();
+        }
+
+        // 🔔 Notification - Member added again
+        try {
+            await Notification.create({
+                recipient: userId,
+                actor: currentUserId,
+                type: "system",
+                title: "Added to Group",
+                message: `You have been added to the group "${conversation.name}".`,
+                entityType: "user",
+                entityId: userId,
+                data: {
+                    conversationId: conversation._id,
+                    conversationName: conversation.name,
+                    addedBy: currentUserId,
+                    action: "group_member_added"
+                }
+            });
+        } catch (error) {
+            console.error(
+                "Failed to create member add notification:",
+                error.message
+            );
         }
 
         return res.status(200).json(
@@ -213,11 +252,38 @@ const addConversationMember = asyncHandler(async (req, res) => {
         role: "member"
     });
 
-    if (!conversation.participants.some(
-        (participantId) => participantId.toString() === userId.toString()
-    )) {
+    if (
+        !conversation.participants.some(
+            (participantId) =>
+                participantId.toString() === userId.toString()
+        )
+    ) {
         conversation.participants.push(userId);
         await conversation.save();
+    }
+
+    // 🔔 Notification - New member added
+    try {
+        await Notification.create({
+            recipient: userId,
+            actor: currentUserId,
+            type: "system",
+            title: "Added to Group",
+            message: `You have been added to the group "${conversation.name}".`,
+            entityType: "user",
+            entityId: userId,
+            data: {
+                conversationId: conversation._id,
+                conversationName: conversation.name,
+                addedBy: currentUserId,
+                action: "group_member_added"
+            }
+        });
+    } catch (error) {
+        console.error(
+            "Failed to create member add notification:",
+            error.message
+        );
     }
 
     return res.status(201).json(
@@ -229,9 +295,12 @@ const addConversationMember = asyncHandler(async (req, res) => {
     );
 });
 
+
+
 //====================== removeConversationMember ======================//
 
 const removeConversationMember = asyncHandler(async (req, res) => {
+
     const { conversationId } = req.params;
     const { userId } = req.body;
 
@@ -295,6 +364,30 @@ const removeConversationMember = asyncHandler(async (req, res) => {
 
     await member.save();
 
+    // 🔔 Notification - Member removed
+    try {
+        await Notification.create({
+            recipient: userId,
+            actor: currentUserId,
+            type: "system",
+            title: "Removed from Group",
+            message: `You have been removed from the group "${conversation.name}".`,
+            entityType: "user",
+            entityId: userId,
+            data: {
+                conversationId: conversation._id,
+                conversationName: conversation.name,
+                removedBy: currentUserId,
+                action: "group_member_removed"
+            }
+        });
+    } catch (error) {
+        console.error(
+            "Failed to create member remove notification:",
+            error.message
+        );
+    }
+
     return res.status(200).json(
         new ApiResponse(
             200,
@@ -304,10 +397,12 @@ const removeConversationMember = asyncHandler(async (req, res) => {
     );
 });
 
-//====================== leaveConversation ======================//
 
-   const leaveConversation = asyncHandler(async (req, res) => {
-    
+
+//===================== leaveConversation ==================================//
+
+const leaveConversation = asyncHandler(async (req, res) => {
+
     const { conversationId } = req.params;
     const currentUserId = req.user?._id;
 
@@ -324,7 +419,9 @@ const removeConversationMember = asyncHandler(async (req, res) => {
     let responseMessage = "You left the conversation successfully";
 
     try {
+
         await session.withTransaction(async () => {
+
             // 1. Find active conversation
             const conversation = await Conversation.findOne({
                 _id: conversationId,
@@ -343,7 +440,7 @@ const removeConversationMember = asyncHandler(async (req, res) => {
                 );
             }
 
-            // 3. Get every active membership
+            // 3. Get active members
             const activeMembers = await ConversationMember.find({
                 conversation: conversation._id,
                 isActive: true
@@ -359,17 +456,11 @@ const removeConversationMember = asyncHandler(async (req, res) => {
                 );
             }
 
-            /*
-             * 4. Validate roles and normalize active members by user.
-             *
-             * One user should have only one active membership.
-             * Existing bad data may contain duplicates, so we collapse
-             * duplicate records here before making leave/admin decisions.
-             */
             const membersByUser = new Map();
             const duplicateMembershipIds = [];
 
             for (const member of activeMembers) {
+
                 const userId = member.user.toString();
 
                 if (!["member", "admin"].includes(member.role)) {
@@ -380,18 +471,19 @@ const removeConversationMember = asyncHandler(async (req, res) => {
                 }
 
                 if (!membersByUser.has(userId)) {
+
                     membersByUser.set(userId, {
                         user: member.user,
                         role: member.role,
                         memberId: member._id,
                         joinedAt: member.joinedAt
                     });
+
                     continue;
                 }
 
                 const existingMember = membersByUser.get(userId);
 
-                // Conflicting duplicate roles indicate corrupted data.
                 if (existingMember.role !== member.role) {
                     throw new ApiError(
                         500,
@@ -416,9 +508,9 @@ const removeConversationMember = asyncHandler(async (req, res) => {
                 );
             }
 
-            // 6. Clean up old duplicate active membership records.
-            //    Nothing is physically deleted.
+            // 6. Clean up old duplicate active membership records
             if (duplicateMembershipIds.length > 0) {
+
                 await ConversationMember.updateMany(
                     {
                         _id: { $in: duplicateMembershipIds },
@@ -443,6 +535,7 @@ const removeConversationMember = asyncHandler(async (req, res) => {
 
             // 8. Last member is leaving
             if (remainingMembers.length === 0) {
+
                 await ConversationMember.updateMany(
                     {
                         conversation: conversation._id,
@@ -460,8 +553,7 @@ const removeConversationMember = asyncHandler(async (req, res) => {
                     }
                 );
 
-                // Keep conversation for history.
-                // Just archive/deactivate it.
+                // Keep conversation for history
                 conversation.participants = [];
                 conversation.isActive = false;
 
@@ -475,17 +567,14 @@ const removeConversationMember = asyncHandler(async (req, res) => {
 
             // 9. If admin is leaving, guarantee another admin exists
             if (currentUserMember.role === "admin") {
+
                 const remainingAdmins = remainingMembers.filter(
                     (member) => member.role === "admin"
                 );
 
                 // Current user was the last admin
                 if (remainingAdmins.length === 0) {
-                    /*
-                     * uniqueMembers are already sorted by joinedAt + _id.
-                     * Therefore the first remaining member is deterministic
-                     * and represents the oldest remaining member.
-                     */
+
                     const newAdmin = remainingMembers[0];
 
                     const promotedMember =
@@ -515,6 +604,29 @@ const removeConversationMember = asyncHandler(async (req, res) => {
                     }
 
                     newAdmin.role = "admin";
+
+                    // 🔔 Notification - New admin
+                    try {
+                        await Notification.create({
+                            recipient: newAdmin.user,
+                            actor: currentUserId,
+                            type: "system",
+                            title: "You Are Now a Group Admin",
+                            message: `You are now an admin of the group "${conversation.name}".`,
+                            entityType: "user",
+                            entityId: newAdmin.user,
+                            data: {
+                                conversationId: conversation._id,
+                                conversationName: conversation.name,
+                                action: "group_admin_promoted"
+                            }
+                        });
+                    } catch (error) {
+                        console.error(
+                            "Failed to create admin promotion notification:",
+                            error.message
+                        );
+                    }
                 }
             }
 
@@ -552,6 +664,7 @@ const removeConversationMember = asyncHandler(async (req, res) => {
                 responseMessage
             )
         );
+
     } finally {
         await session.endSession();
     }
@@ -615,9 +728,12 @@ const getConversationMembers = asyncHandler(async (req, res) => {
         );
 });
 
+
+
 //====================== updateMemberRole ======================//
 
 const updateMemberRole = asyncHandler(async (req, res) => {
+
     const { conversationId } = req.params;
     const { userId, role } = req.body;
     const currentUserId = req.user?._id;
@@ -670,14 +786,15 @@ const updateMemberRole = asyncHandler(async (req, res) => {
         );
     }
 
-  const targetMember = await ConversationMember.findOne({
-    conversation: conversationId,
-    user: userId,
-    isActive: true
-}).populate(
-    "user",
-    "username fullName avatar"
-);
+    const targetMember = await ConversationMember.findOne({
+        conversation: conversationId,
+        user: userId,
+        isActive: true
+    }).populate(
+        "user",
+        "username fullName avatar"
+    );
+
     if (!targetMember) {
         throw new ApiError(
             404,
@@ -697,6 +814,7 @@ const updateMemberRole = asyncHandler(async (req, res) => {
 
     // Prevent removing the last admin
     if (targetMember.role === "admin" && role === "member") {
+
         const otherAdmin = await ConversationMember.findOne({
             conversation: conversationId,
             user: { $ne: userId },
@@ -716,6 +834,46 @@ const updateMemberRole = asyncHandler(async (req, res) => {
 
     await targetMember.save();
 
+    // 🔔 Notification - Role changed
+    try {
+
+        const roleTitle =
+            role === "admin"
+                ? "You Are Now a Group Admin"
+                : "Group Admin Role Removed";
+
+        const roleMessage =
+            role === "admin"
+                ? `You are now an admin of the group "${conversation.name}".`
+                : `Your admin role has been removed from the group "${conversation.name}".`;
+
+        await Notification.create({
+            recipient: userId,
+            actor: currentUserId,
+            type: "system",
+            title: roleTitle,
+            message: roleMessage,
+            entityType: "user",
+            entityId: userId,
+            data: {
+                conversationId: conversation._id,
+                conversationName: conversation.name,
+                changedBy: currentUserId,
+                oldRole: targetMember.role === "admin"
+                    ? "member"
+                    : "admin",
+                newRole: role,
+                action: "group_member_role_changed"
+            }
+        });
+
+    } catch (error) {
+        console.error(
+            "Failed to create role change notification:",
+            error.message
+        );
+    }
+
     return res.status(200).json(
         new ApiResponse(
             200,
@@ -725,7 +883,9 @@ const updateMemberRole = asyncHandler(async (req, res) => {
     );
 });
 
-//====================== updateLastRead ======================//    
+
+
+//====================== updateLastRead ======================//
 
 const updateLastRead = asyncHandler(async (req, res) => {
 
@@ -776,6 +936,8 @@ const updateLastRead = asyncHandler(async (req, res) => {
             )
         );
 });
+
+
 
 //====================== muteConversation ======================//
 
@@ -847,6 +1009,8 @@ const muteConversation = asyncHandler(async (req, res) => {
         );
 });
 
+
+
 //===================== unmuteConversation ======================//
 
 const unmuteConversation = asyncHandler(async (req, res) => {
@@ -899,9 +1063,12 @@ const unmuteConversation = asyncHandler(async (req, res) => {
         );
 });
 
+
+
 //====================== archiveConversation ======================//
 
 const archiveConversation = asyncHandler(async (req, res) => {
+
     const { conversationId } = req.params;
     const currentUserId = req.user?._id;
 
@@ -958,9 +1125,12 @@ const archiveConversation = asyncHandler(async (req, res) => {
     );
 });
 
+
+
 //====================== unarchiveConversation ======================//
 
 const unarchiveConversation = asyncHandler(async (req, res) => {
+
     const { conversationId } = req.params;
     const currentUserId = req.user?._id;
 
@@ -1017,6 +1187,8 @@ const unarchiveConversation = asyncHandler(async (req, res) => {
     );
 });
 
+
+
 export {
     createMemberConversation,
     addConversationMember,
@@ -1025,7 +1197,7 @@ export {
     getConversationMembers,
     updateMemberRole,
     updateLastRead,
-    muteConversation, 
+    muteConversation,
     unmuteConversation,
     archiveConversation,
     unarchiveConversation

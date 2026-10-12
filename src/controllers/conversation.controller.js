@@ -14,27 +14,28 @@ const createDirectConversation = asyncHandler(async (req, res) => {
     const { participantId } = req.body;
 
     const currentUserId = req.user?._id;
-    
+
     if (!currentUserId) {
         throw new ApiError(
             401,
             "Unauthorized request"
         );
     }
-  
+
     if (!participantId) {
         throw new ApiError(
             400,
             "Participant ID is required"
         );
     }
+
     if (!mongoose.Types.ObjectId.isValid(participantId)) {
         throw new ApiError(
             400,
             "Invalid participant ID"
         );
     }
-f
+
     if (
         currentUserId.toString() ===
         participantId.toString()
@@ -44,6 +45,7 @@ f
             "You cannot create a conversation with yourself"
         );
     }
+
     const user = await User.findOne({
         _id: participantId,
         isActive: true
@@ -57,17 +59,17 @@ f
     }
 
     const blocked = await isBlockedBetweenUsers(
-    currentUserId,
-    participantId
-);
-
-if (blocked) {
-    throw new ApiError(
-        403,
-        "You cannot access this conversation"
+        currentUserId,
+        participantId
     );
-}
-  
+
+    if (blocked) {
+        throw new ApiError(
+            403,
+            "You cannot access this conversation"
+        );
+    }
+
     const existingConversation =
         await Conversation.findOne({
             type: "direct",
@@ -90,7 +92,6 @@ if (blocked) {
         );
     }
 
-  
     const conversation =
         await Conversation.create({
             participants: [
