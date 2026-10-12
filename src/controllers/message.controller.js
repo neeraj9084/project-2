@@ -8,6 +8,7 @@ import { Message } from "../models/message.model.js";
 import { Conversation } from "../models/conversation.model.js";
 import { ConversationMember } from "../models/conversationMember.model.js";
 import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
+import { Notification } from "../models/notification.model.js";
 
 // ====================== sendMessage ====================== //
 
@@ -202,6 +203,75 @@ if (otherParticipant) {
         message.createdAt;
 
     await conversation.save();
+  
+
+try {
+    if (conversation.type === "direct") {
+        const recipientId = conversation.participants.find(
+            (participant) =>
+                participant.toString() !== currentUserId.toString()
+        );
+
+        if (recipientId) {
+            await Notification.create({
+                recipient: recipientId,
+                actor: currentUserId,
+                type: "system",
+                title: "New Message",
+                message:
+                    type === "text"
+                        ? `${req.user.username} sent you a message`
+                        : `${req.user.username} sent you a ${type}`,
+                entityType: "user",
+                entityId: currentUserId,
+                data: {
+                    conversationId: conversation._id,
+                    messageId: message._id,
+                    senderId: currentUserId,
+                    messageType: type,
+                    action: "new_message"
+                }
+            });
+        }
+    }
+
+    if (conversation.type === "group") {
+        const members = await ConversationMember.find({
+            conversation: conversation._id,
+            isActive: true,
+            user: { $ne: currentUserId }
+        }).select("user");
+
+        if (members.length > 0) {
+            const notifications = members.map((member) => ({
+                recipient: member.user,
+                actor: currentUserId,
+                type: "system",
+                title: "New Group Message",
+                message:
+                    type === "text"
+                        ? `${req.user.username} sent a message in the group`
+                        : `${req.user.username} sent a ${type} in the group`,
+                entityType: "user",
+                entityId: currentUserId,
+                data: {
+                    conversationId: conversation._id,
+                    messageId: message._id,
+                    senderId: currentUserId,
+                    messageType: type,
+                    action: "new_group_message"
+                }
+            }));
+
+            await Notification.insertMany(notifications);
+        }
+    }
+} catch (error) {
+    console.error(
+        "Failed to create message notification:",
+        error.message
+    );
+}
 
     await message.populate(
         "sender",
