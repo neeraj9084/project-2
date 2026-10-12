@@ -276,9 +276,49 @@ const updateUserStatus = asyncHandler(async (req, res) => {
         "-passwordResetToken"
     );
 
+    // ================= User Not Found ================= //
+
     if (!user) {
         throw new ApiError(404, "User not found");
     }
+
+
+    // ================= Notification ================= //
+
+    try {
+        await Notification.create({
+            recipient: user._id,
+            actor: req.user._id,
+            type: "system",
+
+            title: isActive
+                ? "Account Activated"
+                : "Account Deactivated",
+
+            message: isActive
+                ? "Your account has been activated by an administrator."
+                : "Your account has been deactivated by an administrator.",
+
+            entityType: "user",
+            entityId: user._id,
+
+            data: {
+                userId: user._id,
+                isActive,
+                action: isActive
+                    ? "account_activated"
+                    : "account_deactivated"
+            }
+        });
+    } catch (error) {
+        console.error(
+            "Failed to create user status notification:",
+            error.message
+        );
+    }
+
+
+    // ================= Response ================= //
 
     return res.status(200).json(
         new ApiResponse(
@@ -288,7 +328,6 @@ const updateUserStatus = asyncHandler(async (req, res) => {
         )
     );
 });
-
 //===================== getAllVideos ================================//
 
 const getAllVideos = asyncHandler(async(req, res) => {
@@ -589,6 +628,40 @@ const updateVideoStatus = asyncHandler(async (req, res) => {
     if (!video) {
         throw new ApiError(404, "Video not found");
     }
+     
+    try {
+    await Notification.create({
+        recipient: video.owner,
+        actor: req.user._id,
+        type: "system",
+
+        title: isPublished
+            ? "Video Published"
+            : "Video Unpublished",
+
+        message: isPublished
+            ? `Your video "${video.title}" has been published by an administrator.`
+            : `Your video "${video.title}" has been unpublished by an administrator.`,
+
+        entityType: "video",
+        entityId: video._id,
+
+        data: {
+            videoId: video._id,
+            videoTitle: video.title,
+            thumbnail: video.thumbnail,
+            isPublished,
+            action: isPublished
+                ? "video_published"
+                : "video_unpublished"
+        }
+    });
+} catch (error) {
+    console.error(
+        "Failed to create video status notification:",
+        error.message
+    );
+}
 
     return res.status(200).json(
         new ApiResponse(
