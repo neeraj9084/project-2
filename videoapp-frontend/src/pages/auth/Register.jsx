@@ -1,3 +1,4 @@
+
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -39,6 +40,7 @@ function Register() {
     setSuccess("");
   };
 
+  // Step 1: Start registration
   const handleStartRegistration = async (e) => {
     e.preventDefault();
 
@@ -101,6 +103,7 @@ function Register() {
     }
   };
 
+  // Step 2: Verify OTP
   const handleVerifyOtp = async (e) => {
     e.preventDefault();
 
@@ -138,6 +141,7 @@ function Register() {
     } catch (err) {
       setError(
         err?.response?.data?.message ||
+          err?.message ||
           "OTP verification failed."
       );
     } finally {
@@ -145,6 +149,7 @@ function Register() {
     }
   };
 
+  // Resend verification OTP
   const handleResendOtp = async () => {
     setError("");
     setSuccess("");
@@ -177,6 +182,7 @@ function Register() {
     }
   };
 
+  // Step 3: Complete registration
   const handleCompleteRegistration = async (e) => {
     e.preventDefault();
 
@@ -251,6 +257,7 @@ function Register() {
     }
   };
 
+  // Navigate between registration steps
   const handleBack = () => {
     setError("");
     setSuccess("");
@@ -276,12 +283,94 @@ function Register() {
   };
 
   const inputClass =
-    "w-full rounded-xl border border-white/[0.08] bg-[#05070a] px-4 py-3 text-sm text-white outline-none placeholder:text-white/30 transition focus:border-[#7567ff]/60 focus:ring-1 focus:ring-[#7567ff]/30 disabled:cursor-not-allowed disabled:opacity-60";
+    "register-input w-full rounded-xl border border-white/15 bg-[#05070a] px-4 py-3 text-sm outline-none transition focus:border-[#7567ff] focus:ring-2 focus:ring-[#7567ff]/30 disabled:cursor-not-allowed disabled:opacity-60";
 
   return (
-    <div className="min-h-screen bg-[#040608] px-4 py-8 font-sans text-white">
+    <div
+      id="videoapp-register"
+      className="min-h-screen bg-[#040608] px-4 py-8 font-sans"
+    >
+      {/* Fix text visibility without changing the app's global CSS */}
+      <style>{`
+        #videoapp-register {
+          color: #ffffff !important;
+          color-scheme: dark;
+        }
+
+        #videoapp-register .register-heading {
+          color: #ffffff !important;
+          -webkit-text-fill-color: #ffffff !important;
+        }
+
+        #videoapp-register .register-description,
+        #videoapp-register .register-label,
+        #videoapp-register .register-email {
+          color: #e5e7eb !important;
+          -webkit-text-fill-color: #e5e7eb !important;
+        }
+
+        #videoapp-register .register-muted {
+          color: #cbd5e1 !important;
+          -webkit-text-fill-color: #cbd5e1 !important;
+        }
+
+        #videoapp-register .register-helper {
+          color: #9ca3af !important;
+          -webkit-text-fill-color: #9ca3af !important;
+        }
+
+        #videoapp-register .register-input {
+          color: #ffffff !important;
+          -webkit-text-fill-color: #ffffff !important;
+          caret-color: #ffffff;
+        }
+
+        #videoapp-register .register-input::placeholder {
+          color: #9ca3af !important;
+          -webkit-text-fill-color: #9ca3af !important;
+          opacity: 1 !important;
+        }
+
+        #videoapp-register .register-primary-button,
+        #videoapp-register .register-primary-button span {
+          color: #ffffff !important;
+          -webkit-text-fill-color: #ffffff !important;
+        }
+
+        #videoapp-register .register-link {
+          color: #a39aff !important;
+          -webkit-text-fill-color: #a39aff !important;
+        }
+
+        #videoapp-register .register-link:hover {
+          color: #c4baff !important;
+          -webkit-text-fill-color: #c4baff !important;
+        }
+
+        #videoapp-register .register-error {
+          color: #fca5a5 !important;
+          -webkit-text-fill-color: #fca5a5 !important;
+        }
+
+        #videoapp-register .register-success {
+          color: #6ee7b7 !important;
+          -webkit-text-fill-color: #6ee7b7 !important;
+        }
+
+        #videoapp-register .register-back-button {
+          color: #cbd5e1 !important;
+          -webkit-text-fill-color: #cbd5e1 !important;
+        }
+
+        #videoapp-register .register-back-button:hover {
+          color: #ffffff !important;
+          -webkit-text-fill-color: #ffffff !important;
+        }
+      `}</style>
+
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-lg items-center justify-center">
-        <div className="w-full rounded-2xl border border-white/[0.08] bg-[#070a0e] p-6 shadow-2xl sm:p-8">
+        <div className="w-full rounded-2xl border border-white/20 bg-[#070a0e] p-6 shadow-2xl sm:p-8">
+          {/* Header */}
           <div className="mb-8 text-center">
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#7567ff]/15">
               <span className="text-xl font-bold text-[#7567ff]">
@@ -289,40 +378,53 @@ function Register() {
               </span>
             </div>
 
-            <h1 className="text-2xl font-semibold tracking-tight">
+            <h1 className="register-heading text-2xl font-semibold tracking-tight">
               Create your account
             </h1>
 
-            <p className="mt-2 text-sm text-white/50">
+            <p className="register-description mt-2 text-sm">
               Join VideoApp and start sharing
             </p>
           </div>
 
-          <div className="mb-7 flex items-center justify-center gap-2">
+          {/* Progress indicator */}
+          <div
+            className="mb-7 flex items-center justify-center gap-2"
+            aria-label={`Registration step ${step} of 3`}
+          >
             {[1, 2, 3].map((item) => (
               <div
                 key={item}
                 className={`h-1.5 rounded-full transition-all ${
                   step >= item
                     ? "w-10 bg-[#7567ff]"
-                    : "w-6 bg-white/10"
+                    : "w-6 bg-white/15"
                 }`}
               />
             ))}
           </div>
 
+          {/* Error */}
           {error && (
-            <div className="mb-5 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            <div
+              role="alert"
+              className="register-error mb-5 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm"
+            >
               {error}
             </div>
           )}
 
+          {/* Success */}
           {success && (
-            <div className="mb-5 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
+            <div
+              role="status"
+              className="register-success mb-5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm"
+            >
               {success}
             </div>
           )}
 
+          {/* Step 1: Basic information */}
           {step === 1 && (
             <form
               onSubmit={handleStartRegistration}
@@ -331,7 +433,7 @@ function Register() {
               <div>
                 <label
                   htmlFor="fullName"
-                  className="mb-2 block text-sm font-medium text-white/80"
+                  className="register-label mb-2 block text-sm font-medium"
                 >
                   Full name
                 </label>
@@ -345,6 +447,7 @@ function Register() {
                   onChange={handleChange}
                   placeholder="Enter your full name"
                   disabled={loading}
+                  required
                   className={inputClass}
                 />
               </div>
@@ -352,7 +455,7 @@ function Register() {
               <div>
                 <label
                   htmlFor="username"
-                  className="mb-2 block text-sm font-medium text-white/80"
+                  className="register-label mb-2 block text-sm font-medium"
                 >
                   Username
                 </label>
@@ -366,10 +469,11 @@ function Register() {
                   onChange={handleChange}
                   placeholder="e.g. neeraj@11"
                   disabled={loading}
+                  required
                   className={inputClass}
                 />
 
-                <p className="mt-2 text-xs text-white/35">
+                <p className="register-helper mt-2 text-xs">
                   Use letters, numbers, _, @ or .
                 </p>
               </div>
@@ -377,7 +481,7 @@ function Register() {
               <div>
                 <label
                   htmlFor="email"
-                  className="mb-2 block text-sm font-medium text-white/80"
+                  className="register-label mb-2 block text-sm font-medium"
                 >
                   Email
                 </label>
@@ -391,6 +495,7 @@ function Register() {
                   onChange={handleChange}
                   placeholder="Enter your email"
                   disabled={loading}
+                  required
                   className={inputClass}
                 />
               </div>
@@ -398,31 +503,32 @@ function Register() {
               <button
                 type="submit"
                 disabled={loading}
-                className="flex w-full items-center justify-center rounded-xl bg-[#7567ff] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#6b5df0] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+                className="register-primary-button flex w-full items-center justify-center rounded-xl bg-[#7567ff] px-4 py-3 text-sm font-semibold transition hover:bg-[#6b5df0] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {loading ? (
                   <>
                     <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                    Sending OTP...
+                    <span>Sending OTP...</span>
                   </>
                 ) : (
-                  "Continue"
+                  <span>Continue</span>
                 )}
               </button>
             </form>
           )}
 
+          {/* Step 2: OTP verification */}
           {step === 2 && (
             <form
               onSubmit={handleVerifyOtp}
               className="space-y-5"
             >
               <div className="text-center">
-                <p className="text-sm text-white/50">
+                <p className="register-muted text-sm">
                   We sent a verification OTP to
                 </p>
 
-                <p className="mt-1 break-all text-sm font-medium text-white">
+                <p className="register-email mt-1 break-all text-sm font-medium">
                   {formData.email}
                 </p>
               </div>
@@ -430,7 +536,7 @@ function Register() {
               <div>
                 <label
                   htmlFor="otp"
-                  className="mb-2 block text-sm font-medium text-white/80"
+                  className="register-label mb-2 block text-sm font-medium"
                 >
                   Verification OTP
                 </label>
@@ -446,6 +552,7 @@ function Register() {
                   onChange={handleChange}
                   placeholder="Enter 6-digit OTP"
                   disabled={loading}
+                  required
                   className={`${inputClass} text-center text-lg tracking-[0.35em]`}
                 />
               </div>
@@ -453,24 +560,24 @@ function Register() {
               <button
                 type="submit"
                 disabled={loading}
-                className="flex w-full items-center justify-center rounded-xl bg-[#7567ff] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#6b5df0] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+                className="register-primary-button flex w-full items-center justify-center rounded-xl bg-[#7567ff] px-4 py-3 text-sm font-semibold transition hover:bg-[#6b5df0] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {loading ? (
                   <>
                     <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                    Verifying...
+                    <span>Verifying...</span>
                   </>
                 ) : (
-                  "Verify OTP"
+                  <span>Verify OTP</span>
                 )}
               </button>
 
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-4">
                 <button
                   type="button"
                   onClick={handleBack}
                   disabled={loading || resending}
-                  className="text-sm text-white/50 transition hover:text-white disabled:opacity-50"
+                  className="register-back-button text-sm transition disabled:opacity-50"
                 >
                   Back
                 </button>
@@ -479,7 +586,7 @@ function Register() {
                   type="button"
                   onClick={handleResendOtp}
                   disabled={loading || resending}
-                  className="text-sm font-medium text-[#8b7fff] transition hover:text-[#a39aff] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="register-link text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {resending ? "Sending..." : "Resend OTP"}
                 </button>
@@ -487,6 +594,7 @@ function Register() {
             </form>
           )}
 
+          {/* Step 3: Set password */}
           {step === 3 && (
             <form
               onSubmit={handleCompleteRegistration}
@@ -497,7 +605,7 @@ function Register() {
                   Email verified
                 </p>
 
-                <p className="mt-1 text-xs text-white/40">
+                <p className="register-muted mt-1 text-xs">
                   Create your password to finish registration.
                 </p>
               </div>
@@ -505,7 +613,7 @@ function Register() {
               <div>
                 <label
                   htmlFor="password"
-                  className="mb-2 block text-sm font-medium text-white/80"
+                  className="register-label mb-2 block text-sm font-medium"
                 >
                   Password
                 </label>
@@ -519,6 +627,8 @@ function Register() {
                   onChange={handleChange}
                   placeholder="Create a password"
                   disabled={loading}
+                  required
+                  minLength={8}
                   className={inputClass}
                 />
               </div>
@@ -526,7 +636,7 @@ function Register() {
               <div>
                 <label
                   htmlFor="confirmPassword"
-                  className="mb-2 block text-sm font-medium text-white/80"
+                  className="register-label mb-2 block text-sm font-medium"
                 >
                   Confirm password
                 </label>
@@ -540,6 +650,7 @@ function Register() {
                   onChange={handleChange}
                   placeholder="Confirm your password"
                   disabled={loading}
+                  required
                   className={inputClass}
                 />
               </div>
@@ -547,15 +658,15 @@ function Register() {
               <button
                 type="submit"
                 disabled={loading}
-                className="flex w-full items-center justify-center rounded-xl bg-[#7567ff] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#6b5df0] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+                className="register-primary-button flex w-full items-center justify-center rounded-xl bg-[#7567ff] px-4 py-3 text-sm font-semibold transition hover:bg-[#6b5df0] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {loading ? (
                   <>
                     <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                    Creating account...
+                    <span>Creating account...</span>
                   </>
                 ) : (
-                  "Create account"
+                  <span>Create account</span>
                 )}
               </button>
 
@@ -563,18 +674,19 @@ function Register() {
                 type="button"
                 onClick={handleBack}
                 disabled={loading}
-                className="w-full text-sm text-white/50 transition hover:text-white disabled:opacity-50"
+                className="register-back-button w-full text-sm transition disabled:opacity-50"
               >
                 Back
               </button>
             </form>
           )}
 
-          <div className="mt-7 text-center text-sm text-white/50">
+          {/* Login link */}
+          <div className="register-muted mt-7 text-center text-sm">
             Already have an account?{" "}
             <Link
               to="/login"
-              className="font-medium text-[#8b7fff] transition hover:text-[#a39aff]"
+              className="register-link font-semibold transition"
             >
               Sign in
             </Link>

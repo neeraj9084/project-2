@@ -74,12 +74,73 @@ function Login() {
   };
 
   const inputClass =
-    "w-full rounded-xl border border-white/[0.08] bg-[#05070a] px-4 py-3 text-sm text-white outline-none placeholder:text-white/30 transition focus:border-[#7567ff]/60 focus:ring-1 focus:ring-[#7567ff]/30 disabled:cursor-not-allowed disabled:opacity-60";
+    "login-input w-full rounded-xl border border-white/15 bg-[#05070a] px-4 py-3 text-sm outline-none transition focus:border-[#7567ff] focus:ring-2 focus:ring-[#7567ff]/30 disabled:cursor-not-allowed disabled:opacity-60";
 
   return (
-    <div className="min-h-screen bg-[#040608] px-4 py-8 font-sans text-white">
+    <div
+      id="videoapp-login"
+      className="min-h-screen bg-[#040608] px-4 py-8 font-sans"
+    >
+      {/* Scoped colour overrides: prevent global CSS from hiding text */}
+      <style>{`
+        #videoapp-login {
+          color: #ffffff !important;
+          color-scheme: dark;
+        }
+
+        #videoapp-login .login-heading {
+          color: #ffffff !important;
+          -webkit-text-fill-color: #ffffff !important;
+        }
+
+        #videoapp-login .login-description,
+        #videoapp-login .login-label {
+          color: #e5e7eb !important;
+          -webkit-text-fill-color: #e5e7eb !important;
+        }
+
+        #videoapp-login .login-input {
+          color: #ffffff !important;
+          -webkit-text-fill-color: #ffffff !important;
+          caret-color: #ffffff;
+        }
+
+        #videoapp-login .login-input::placeholder {
+          color: #9ca3af !important;
+          -webkit-text-fill-color: #9ca3af !important;
+          opacity: 1;
+        }
+
+        #videoapp-login .login-primary-button,
+        #videoapp-login .login-primary-button span {
+          color: #ffffff !important;
+          -webkit-text-fill-color: #ffffff !important;
+        }
+
+        #videoapp-login .login-footer {
+          color: #d1d5db !important;
+          -webkit-text-fill-color: #d1d5db !important;
+        }
+
+        #videoapp-login .login-link {
+          color: #a39aff !important;
+          -webkit-text-fill-color: #a39aff !important;
+        }
+
+        #videoapp-login .login-link:hover {
+          color: #c4baff !important;
+          -webkit-text-fill-color: #c4baff !important;
+        }
+
+        #videoapp-login .login-error {
+          color: #fca5a5 !important;
+          -webkit-text-fill-color: #fca5a5 !important;
+        }
+      `}</style>
+
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-md items-center justify-center">
-        <div className="w-full rounded-2xl border border-white/[0.08] bg-[#070a0e] p-6 shadow-2xl sm:p-8">
+        <div className="w-full rounded-2xl border border-white/15 bg-[#070a0e] p-6 shadow-2xl sm:p-8">
+          {/* Header */}
           <div className="mb-8 text-center">
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#7567ff]/15">
               <span className="text-xl font-bold text-[#7567ff]">
@@ -87,29 +148,31 @@ function Login() {
               </span>
             </div>
 
-            <h1 className="text-2xl font-semibold tracking-tight">
+            <h1 className="login-heading text-2xl font-semibold tracking-tight">
               Welcome back
             </h1>
 
-            <p className="mt-2 text-sm text-white/50">
+            <p className="login-description mt-2 text-sm">
               Sign in to continue to VideoApp
             </p>
           </div>
 
+          {/* Error message */}
           {error && (
             <div
               role="alert"
-              className="mb-5 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+              className="login-error mb-5 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm"
             >
               {error}
             </div>
           )}
 
+          {/* Login form */}
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
               <label
                 htmlFor="identifier"
-                className="mb-2 block text-sm font-medium text-white/80"
+                className="login-label mb-2 block text-sm font-medium"
               >
                 Email or username
               </label>
@@ -129,17 +192,17 @@ function Login() {
             </div>
 
             <div>
-              <div className="mb-2 flex items-center justify-between">
+              <div className="mb-2 flex items-center justify-between gap-3">
                 <label
                   htmlFor="password"
-                  className="block text-sm font-medium text-white/80"
+                  className="login-label block text-sm font-medium"
                 >
                   Password
                 </label>
 
                 <Link
                   to="/forgot-password"
-                  className="text-xs text-[#8b7fff] transition hover:text-[#a39aff]"
+                  className="login-link text-xs transition"
                 >
                   Forgot password?
                 </Link>
@@ -159,27 +222,29 @@ function Login() {
               />
             </div>
 
+            {/* Submit button */}
             <button
               type="submit"
               disabled={loading}
-              className="flex w-full items-center justify-center rounded-xl bg-[#7567ff] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#6b5df0] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+              className="login-primary-button flex w-full items-center justify-center rounded-xl bg-[#7567ff] px-4 py-3 text-sm font-semibold transition hover:bg-[#6b5df0] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {loading ? (
                 <>
                   <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                  Signing in...
+                  <span>Signing in...</span>
                 </>
               ) : (
-                "Sign in"
+                <span>Sign in</span>
               )}
             </button>
           </form>
 
-          <div className="mt-7 text-center text-sm text-white/50">
-            Don't have an account?{" "}
+          {/* Footer */}
+          <div className="login-footer mt-7 text-center text-sm">
+            Don&apos;t have an account?{" "}
             <Link
               to="/register"
-              className="font-medium text-[#8b7fff] transition hover:text-[#a39aff]"
+              className="login-link font-semibold transition"
             >
               Create account
             </Link>
