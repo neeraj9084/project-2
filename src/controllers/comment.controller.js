@@ -9,15 +9,25 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
-
 //====================== addComment ===============================//
 
 const addComment = asyncHandler(async (req, res) => {
-
     const { videoId } = req.params;
+    const { content, parentComment = null } = req.body;
 
     if (!mongoose.Types.ObjectId.isValid(videoId)) {
         throw new ApiError(400, "Invalid video ID");
+    }
+
+    if (
+        typeof content !== "string" ||
+        !content.trim() ||
+        content.trim().length > 1000
+    ) {
+        throw new ApiError(
+            400,
+            "Comment must contain 1 to 1000 characters"
+        );
     }
 
     const video = await Video.findOne({
@@ -41,42 +51,71 @@ const addComment = asyncHandler(async (req, res) => {
         );
     }
 
-    const { content } = req.body;
+    let parent = null;
 
-    if (!content?.trim()) {
-        throw new ApiError(400, "Comment content is required");
+    // A reply can target any comment or reply on this video.
+    if (parentComment !== null && parentComment !== "") {
+        if (
+            typeof parentComment !== "string" ||
+            !mongoose.Types.ObjectId.isValid(parentComment)
+        ) {
+            throw new ApiError(400, "Invalid parent comment ID");
+        }
+
+        parent = await Comment.findOne({
+            _id: parentComment,
+            video: videoId
+        });
+
+        if (!parent) {
+            throw new ApiError(
+                404,
+                "Parent comment not found for this video"
+            );
+        }
+
+        const parentBlocked = await isBlockedBetweenUsers(
+            req.user._id,
+            parent.owner
+        );
+
+        if (parentBlocked) {
+            throw new ApiError(
+                403,
+                "You cannot reply to this comment"
+            );
+        }
     }
 
     const comment = await Comment.create({
-        video: videoId,
+        video: video._id,
         content: content.trim(),
-        owner: req.user._id
+        owner: req.user._id,
+        parentComment: parent ? parent._id : null
     });
 
     if (!comment) {
-        throw new ApiError(500, "Failed to comment video");
+        throw new ApiError(500, "Failed to add comment");
     }
 
+    // Notify the parent comment owner for a reply.
+    // Otherwise, notify the video owner.
+    const recipientId = parent ? parent.owner : video.owner;
 
-    // ================== Notification ================== //
-
-    // Don't notify if user comments on their own video
-    if (video.owner.toString() !== req.user._id.toString()) {
-
+    if (recipientId.toString() !== req.user._id.toString()) {
         await Notification.create({
-            recipient: video.owner,
+            recipient: recipientId,
             actor: req.user._id,
             type: "comment",
-
-            title: "New Comment",
-
-            message: `${req.user.username} commented on your video: ${video.title}`,
-
+            title: parent ? "New Reply" : "New Comment",
+            message: parent
+                ? `${req.user.username} replied to your comment`
+                : `${req.user.username} commented on your video: ${video.title}`,
             entityType: "comment",
             entityId: comment._id,
-
             data: {
                 commentId: comment._id,
+                parentCommentId: parent?._id ?? null,
                 videoId: video._id,
                 videoTitle: video.title,
                 commenterId: req.user._id,
@@ -85,16 +124,18 @@ const addComment = asyncHandler(async (req, res) => {
         });
     }
 
+    const populatedComment = await Comment.findById(comment._id)
+        .populate("owner", "username fullName avatar isVerified");
 
-    return res
-        .status(201)
-        .json(
-            new ApiResponse(
-                201,
-                comment,
-                "Comment added successfully"
-            )
-        );
+    return res.status(201).json(
+        new ApiResponse(
+            201,
+            populatedComment,
+            parent
+                ? "Reply added successfully"
+                : "Comment added successfully"
+        )
+    );
 });
 
 
@@ -111,6 +152,10 @@ const likeComment = asyncHandler(async (req, res) => {
     const comment = await Comment.findById(commentId);
 
     if (!comment) {
+        throw new ApiError(404, "Comment not found");
+    }
+
+    if (!await Video.exists({ _id: comment.video, isDeleted: { $ne: true } })) {
         throw new ApiError(404, "Comment not found");
     }
 
@@ -221,6 +266,10 @@ const unlikeComment = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Comment not found");
     }
 
+    if (!await Video.exists({ _id: comment.video, isDeleted: { $ne: true } })) {
+        throw new ApiError(404, "Comment not found");
+    }
+
     const blocked = await isBlockedBetweenUsers(
         req.user._id,
         comment.owner
@@ -271,9 +320,13 @@ const getCommentLikeCount = asyncHandler(async (req, res) => {
 
     const comment = await Comment
         .findById(commentId)
-        .select("likes");
+        .select("likes video owner");
 
     if (!comment) {
+        throw new ApiError(404, "Comment not found");
+    }
+
+    if (!await Video.exists({ _id: comment.video, isDeleted: { $ne: true } })) {
         throw new ApiError(404, "Comment not found");
     }
 
@@ -305,7 +358,6 @@ const getCommentLikeCount = asyncHandler(async (req, res) => {
 //===================== getVideoComments =====================//
 
 const getVideoComments = asyncHandler(async (req, res) => {
-
     const { videoId } = req.params;
 
     if (!mongoose.Types.ObjectId.isValid(videoId)) {
@@ -333,28 +385,84 @@ const getVideoComments = asyncHandler(async (req, res) => {
         );
     }
 
-    const comments = await Comment.find({
+    // Fetch ALL comments and replies, regardless of nesting depth.
+    const allComments = await Comment.find({
         video: videoId
     })
         .populate(
             "owner",
-            "username fullName avatar"
+            "username fullName avatar isVerified"
         )
-        .sort({
-            createdAt: -1
+        .sort({ createdAt: -1 })
+        .lean();
+
+    // Create a lookup map and prepare every node.
+    const commentMap = new Map();
+
+    for (const comment of allComments) {
+        const id = String(comment._id);
+
+        commentMap.set(id, {
+            ...comment,
+            replies: [],
+            likeCount: Array.isArray(comment.likes)
+                ? comment.likes.length
+                : 0
         });
+    }
 
-    return res
-        .status(200)
-        .json(
-            new ApiResponse(
-                200,
-                comments,
-                "Video comments fetched successfully"
-            )
+    // Attach every comment to its direct parent.
+    // This works at any depth: comment -> reply -> reply -> ...
+    const rootComments = [];
+
+    for (const comment of allComments) {
+        const id = String(comment._id);
+        const node = commentMap.get(id);
+
+        const parentId = comment.parentComment
+            ? String(comment.parentComment)
+            : null;
+
+        if (!parentId) {
+            rootComments.push(node);
+            continue;
+        }
+
+        const parent = commentMap.get(parentId);
+
+        if (parent) {
+            parent.replies.push(node);
+        } else {
+            // Avoid hiding a comment if its parent no longer exists.
+            rootComments.push(node);
+        }
+    }
+
+    // Sort replies newest first at every nesting level.
+    function sortTree(nodes) {
+        nodes.sort(
+            (a, b) =>
+                new Date(b.createdAt).getTime() -
+                new Date(a.createdAt).getTime()
         );
-});
 
+        for (const node of nodes) {
+            sortTree(node.replies);
+        }
+
+        return nodes;
+    }
+
+    sortTree(rootComments);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            rootComments,
+            "Video comments and nested replies fetched successfully"
+        )
+    );
+});
 
 //===================== getCommentById =============================//
 
@@ -485,30 +593,26 @@ const updateComment = asyncHandler(async (req, res) => {
 });
 
 
+
 //==================== deleteComment ===============================//
 
 const deleteComment = asyncHandler(async (req, res) => {
-
     const { commentId } = req.params;
 
+    // Validate comment ID
     if (!mongoose.Types.ObjectId.isValid(commentId)) {
-        throw new ApiError(
-            400,
-            "Invalid comment ID"
-        );
+        throw new ApiError(400, "Invalid comment ID");
     }
 
-    const comment = await Comment.findById(
-        commentId
-    );
+    // Find the comment that needs to be deleted
+    const comment = await Comment.findById(commentId);
 
     if (!comment) {
-        throw new ApiError(
-            404,
-            "Comment not found"
-        );
+        throw new ApiError(404, "Comment not found");
     }
 
+    // Only the comment owner can delete the comment.
+    // Their deletion will also remove all nested descendants.
     if (!comment.owner.equals(req.user._id)) {
         throw new ApiError(
             403,
@@ -516,19 +620,70 @@ const deleteComment = asyncHandler(async (req, res) => {
         );
     }
 
-    await Comment.findByIdAndDelete(
-        commentId
-    );
+    // Collect the comment and all descendants recursively.
+    const idsToDelete = [comment._id];
+    const visitedIds = new Set([
+        comment._id.toString()
+    ]);
 
-    return res
-        .status(200)
-        .json(
-            new ApiResponse(
-                200,
-                null,
-                "Comment deleted successfully"
-            )
+    // Start with the selected comment as the parent.
+    let parentIds = [comment._id];
+
+    while (parentIds.length > 0) {
+        // Find direct replies to the current parent level.
+        const children = await Comment.find({
+            video: comment.video,
+            parentComment: {
+                $in: parentIds
+            }
+        })
+            .select("_id")
+            .lean();
+
+        const nextParentIds = [];
+
+        for (const child of children) {
+            const childId = child._id.toString();
+
+            // Defensive check to prevent duplicate processing.
+            if (visitedIds.has(childId)) {
+                continue;
+            }
+
+            visitedIds.add(childId);
+            idsToDelete.push(child._id);
+            nextParentIds.push(child._id);
+        }
+
+        // Process the next nesting level.
+        parentIds = nextParentIds;
+    }
+
+    // Delete the selected comment and all its descendants.
+    const deleteResult = await Comment.deleteMany({
+        _id: {
+            $in: idsToDelete
+        },
+        video: comment.video
+    });
+
+    if (deleteResult.deletedCount !== idsToDelete.length) {
+        throw new ApiError(
+            500,
+            "Some comments or replies could not be deleted"
         );
+    }
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                deletedCommentId: commentId,
+                deletedCount: deleteResult.deletedCount
+            },
+            "Comment and all nested replies deleted successfully"
+        )
+    );
 });
 
 

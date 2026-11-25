@@ -30,6 +30,7 @@ router.delete(
 // Get total likes of a video
 router.get(
     "/video/:videoId/count",
+    verifyJWT,
     getVideoLikeCount
 );
 

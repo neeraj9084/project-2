@@ -19,7 +19,11 @@ const router = Router();
 router.post("/video/:videoId", verifyJWT, addComment);
 
 // Get all comments of a video
-router.get("/video/:videoId", getVideoComments);
+router.get(
+    "/video/:videoId",
+    verifyJWT,
+    getVideoComments
+);
 
 // Get single comment
 router.get("/:commentId", getCommentById);
@@ -38,7 +42,11 @@ router.post("/:commentId/like", verifyJWT, likeComment);
 router.delete("/:commentId/like", verifyJWT, unlikeComment);
 
 // Get comment like count
-router.get("/:commentId/likes", getCommentLikeCount);
+router.get(
+    "/:commentId/likes",
+    verifyJWT,
+    getCommentLikeCount
+);
 
 
 export default router;

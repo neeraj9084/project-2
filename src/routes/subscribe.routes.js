@@ -26,8 +26,10 @@ router.delete(
 );
 
 // Get channel subscribers
+// Get channel followers
 router.get(
     "/channel/:channelId/subscribers",
+    verifyJWT,
     getChannelSubscribers
 );
 
