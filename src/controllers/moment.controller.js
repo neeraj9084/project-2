@@ -5,11 +5,14 @@ import fs from "fs/promises";
 import { Moment } from "../models/moment.model.js";
 import { MomentView } from "../models/momentView.model.js";
 import { User } from "../models/user.model.js";
+import { Subscribe } from "../models/subscribe.model.js";
 
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
+import { recordMomentMedia } from "../services/expireMoment.service.js";
+import { videoUploadIdentity, registerVideoMedia, queueVideoMedia } from "../services/videoAssetRegistry.service.js";
 
 const removeLocalFile = async (filePath) => {
     if (!filePath) {
@@ -65,8 +68,13 @@ const normalizeMusic = (music) => {
     };
 };
 
+//===================== createMoment ===========================//
+
 const createMoment = asyncHandler(async (req, res) => {
     const mediaLocalPath = req.file?.path;
+    const momentId = new mongoose.Types.ObjectId();
+    let uploadedMedia = null;
+    let committed = false;
 
     if (!mediaLocalPath) {
         throw new ApiError(
@@ -122,6 +130,7 @@ const createMoment = asyncHandler(async (req, res) => {
         const media = await uploadOnCloudinary(
             mediaLocalPath
         );
+        uploadedMedia = media;
 
         if (!media) {
             throw new ApiError(
@@ -134,15 +143,29 @@ const createMoment = asyncHandler(async (req, res) => {
             Date.now() + 24 * 60 * 60 * 1000
         );
 
-        const moment = await Moment.create({
+        const metadata = videoUploadIdentity(media, mediaType);
+        const session = await mongoose.startSession();
+        try {
+            await session.withTransaction(async () => {
+                await registerVideoMedia({ metadata, kind: "moment", videoId: momentId, owner: req.user._id, session });
+                await Moment.create([{
+            _id: momentId,
             owner: req.user._id,
             mediaUrl: media.secure_url || media.url,
             mediaPublicId: media.public_id,
             mediaType,
+            mediaDeliveryType: media.type || null,
+            mediaResourceType: media.resource_type || null,
+            mediaRegistry: { moment: metadata },
             caption,
             music,
             expiresAt
-        });
+                }], { session });
+            });
+            committed = true;
+        } finally { await session.endSession(); }
+
+        const moment = await Moment.findById(momentId);
 
         return res.status(201).json(
             new ApiResponse(
@@ -152,65 +175,160 @@ const createMoment = asyncHandler(async (req, res) => {
             )
         );
     } finally {
+        if (uploadedMedia && !committed && req.user?._id) {
+            let metadata;
+            try { metadata = videoUploadIdentity(uploadedMedia, uploadedMedia.resource_type); }
+            catch { metadata = { publicId: uploadedMedia.public_id, url: uploadedMedia.secure_url || uploadedMedia.url,
+                resourceType: uploadedMedia.resource_type, deliveryType: uploadedMedia.type }; }
+            try { await queueVideoMedia({ metadata, kind: "moment", videoId: momentId,
+                owner: req.user._id, suffix: "failed-upload" }); }
+            catch (error) { console.error("Failed to queue uploaded Moment media for review:", error); }
+        }
         await removeLocalFile(mediaLocalPath);
     }
 });
 
-const getMoments = asyncHandler(async (req, res) => {
-    const page = Math.max(
-        Number(req.query.page) || 1,
-        1
-    );
+//======================== getMoments ==========================//
 
-    const limit = Math.min(
-        Math.max(Number(req.query.limit) || 20, 1),
-        50
-    );
+const getMoments = asyncHandler(async (req, res) => {
+    const userId = req.user?._id;
+
+    if (!userId) {
+        throw new ApiError(
+            401,
+            "Unauthorized request"
+        );
+    }
+
+    // Read pagination query parameters
+    const rawPage = Array.isArray(req.query.page)
+        ? req.query.page[0]
+        : req.query.page;
+
+    const rawLimit = Array.isArray(req.query.limit)
+        ? req.query.limit[0]
+        : req.query.limit;
+
+    let page = 1;
+    let limit = 20;
+
+    // Validate page
+    if (rawPage !== undefined) {
+        if (
+            typeof rawPage !== "string" ||
+            !/^[1-9]\d*$/.test(rawPage)
+        ) {
+            throw new ApiError(
+                400,
+                "Page must be a positive integer"
+            );
+        }
+
+        page = Number(rawPage);
+
+        if (!Number.isSafeInteger(page)) {
+            throw new ApiError(
+                400,
+                "Page value is too large"
+            );
+        }
+    }
+
+    // Validate limit
+    if (rawLimit !== undefined) {
+        if (
+            typeof rawLimit !== "string" ||
+            !/^[1-9]\d*$/.test(rawLimit)
+        ) {
+            throw new ApiError(
+                400,
+                "Limit must be a positive integer"
+            );
+        }
+
+        limit = Number(rawLimit);
+
+        if (!Number.isSafeInteger(limit)) {
+            throw new ApiError(
+                400,
+                "Limit value is too large"
+            );
+        }
+
+        // Maximum 50 Moments per request
+        limit = Math.min(limit, 50);
+    }
 
     const skip = (page - 1) * limit;
 
-    const now = new Date();
+    if (!Number.isSafeInteger(skip)) {
+        throw new ApiError(
+            400,
+            "Page value is too large"
+        );
+    }
+const now = new Date();
 
-    const [moments, totalMoments] =
-        await Promise.all([
-            Moment.find({
-                expiresAt: {
-                    $gt: now
-                }
+// Find users whom the logged-in user follows
+const subscriptions = await Subscribe.find({
+    subscriber: userId
+})
+    .select("channel")
+    .lean();
+
+const followedUserIds = subscriptions
+    .map((subscription) => subscription.channel)
+    .filter(Boolean);
+
+// Include your own Moments and followed users' Moments
+const allowedOwnerIds = [
+    userId,
+    ...followedUserIds
+];
+
+// Only active Moments from allowed users
+const activeFilter = {
+    owner: {
+        $in: allowedOwnerIds
+    },
+    expiresAt: {
+        $gt: now
+    }
+};
+
+    // Fetch Moments and total count together
+    const [moments, totalMoments] = await Promise.all([
+        Moment.find(activeFilter)
+            .populate(
+                "owner",
+                "username fullName avatar isVerified"
+            )
+            .sort({
+                createdAt: -1,
+                _id: -1
             })
-                .populate(
-                    "owner",
-                    "username fullName avatar isVerified"
-                )
-                .sort({
-                    createdAt: -1
-                })
-                .skip(skip)
-                .limit(limit)
-                .lean(),
+            .skip(skip)
+            .limit(limit)
+            .lean(),
 
-            Moment.countDocuments({
-                expiresAt: {
-                    $gt: now
-                }
-            })
-        ]);
+        Moment.countDocuments(activeFilter)
+    ]);
 
+    // Find which Moments the logged-in user has viewed
     const momentIds = moments.map(
         (moment) => moment._id
     );
 
-    const viewedMoments =
-        momentIds.length > 0
-            ? await MomentView.find({
-                viewer: req.user._id,
-                moment: {
-                    $in: momentIds
-                }
-            })
-                .select("moment")
-                .lean()
-            : [];
+    const viewedMoments = momentIds.length > 0
+        ? await MomentView.find({
+            viewer: userId,
+            moment: {
+                $in: momentIds
+            }
+        })
+            .select("moment")
+            .lean()
+        : [];
 
     const viewedMomentIds = new Set(
         viewedMoments.map(
@@ -218,6 +336,7 @@ const getMoments = asyncHandler(async (req, res) => {
         )
     );
 
+    // Add isViewed to each Moment
     const data = moments.map((moment) => ({
         ...moment,
         isViewed: viewedMomentIds.has(
@@ -248,6 +367,8 @@ const getMoments = asyncHandler(async (req, res) => {
     );
 });
 
+//======================== getMyMoments ==========================//
+
 const getMyMoments = asyncHandler(async (req, res) => {
     const moments = await Moment.find({
         owner: req.user._id,
@@ -268,6 +389,8 @@ const getMyMoments = asyncHandler(async (req, res) => {
         )
     );
 });
+
+//====================== getUserMoments =========================//
 
 const getUserMoments = asyncHandler(async (req, res) => {
     const { userId } = req.params;
@@ -312,6 +435,8 @@ const getUserMoments = asyncHandler(async (req, res) => {
         )
     );
 });
+
+//==================== getMomentById =========================//
 
 const getMomentById = asyncHandler(async (req, res) => {
     const { momentId } = req.params;
@@ -358,6 +483,8 @@ const getMomentById = asyncHandler(async (req, res) => {
         )
     );
 });
+
+//======================== viewMoment ==========================//
 
 const viewMoment = asyncHandler(async (req, res) => {
     const { momentId } = req.params;
@@ -447,9 +574,21 @@ const viewMoment = asyncHandler(async (req, res) => {
     );
 });
 
+//======================== getMomentViewers ==========================//
+
 const getMomentViewers = asyncHandler(async (req, res) => {
     const { momentId } = req.params;
+    const userId = req.user?._id;
 
+    // Login required
+    if (!userId) {
+        throw new ApiError(
+            401,
+            "Unauthorized request"
+        );
+    }
+
+    // Validate Moment ID
     if (!mongoose.Types.ObjectId.isValid(momentId)) {
         throw new ApiError(
             400,
@@ -457,9 +596,13 @@ const getMomentViewers = asyncHandler(async (req, res) => {
         );
     }
 
+    // Only the owner can see viewers of an active Moment
     const moment = await Moment.findOne({
         _id: momentId,
-        owner: req.user._id
+        owner: userId,
+        expiresAt: {
+            $gt: new Date()
+        }
     }).select("_id");
 
     if (!moment) {
@@ -469,38 +612,90 @@ const getMomentViewers = asyncHandler(async (req, res) => {
         );
     }
 
-    const page = Math.max(
-        Number(req.query.page) || 1,
-        1
-    );
+    // Read pagination parameters
+    const rawPage = Array.isArray(req.query.page)
+        ? req.query.page[0]
+        : req.query.page;
 
-    const limit = Math.min(
-        Math.max(Number(req.query.limit) || 20, 1),
-        100
-    );
+    const rawLimit = Array.isArray(req.query.limit)
+        ? req.query.limit[0]
+        : req.query.limit;
+
+    let page = 1;
+    let limit = 20;
+
+    if (rawPage !== undefined) {
+        if (
+            typeof rawPage !== "string" ||
+            !/^[1-9]\d*$/.test(rawPage)
+        ) {
+            throw new ApiError(
+                400,
+                "Page must be a positive integer"
+            );
+        }
+
+        page = Number(rawPage);
+
+        if (!Number.isSafeInteger(page)) {
+            throw new ApiError(
+                400,
+                "Page value is too large"
+            );
+        }
+    }
+
+    if (rawLimit !== undefined) {
+        if (
+            typeof rawLimit !== "string" ||
+            !/^[1-9]\d*$/.test(rawLimit)
+        ) {
+            throw new ApiError(
+                400,
+                "Limit must be a positive integer"
+            );
+        }
+
+        limit = Number(rawLimit);
+
+        if (!Number.isSafeInteger(limit)) {
+            throw new ApiError(
+                400,
+                "Limit value is too large"
+            );
+        }
+
+        limit = Math.min(limit, 100);
+    }
 
     const skip = (page - 1) * limit;
 
-    const [
-        viewers,
-        totalViewers
-    ] = await Promise.all([
+    if (!Number.isSafeInteger(skip)) {
+        throw new ApiError(
+            400,
+            "Page value is too large"
+        );
+    }
+
+    // Fetch viewers and total count
+    const [viewers, totalViewers] = await Promise.all([
         MomentView.find({
-            moment: momentId
+            moment: moment._id
         })
             .populate(
                 "viewer",
                 "username fullName avatar isVerified"
             )
             .sort({
-                viewedAt: -1
+                viewedAt: -1,
+                _id: -1
             })
             .skip(skip)
             .limit(limit)
             .lean(),
 
         MomentView.countDocuments({
-            moment: momentId
+            moment: moment._id
         })
     ]);
 
@@ -527,9 +722,21 @@ const getMomentViewers = asyncHandler(async (req, res) => {
     );
 });
 
+//======================= deleteMoment =========================//
+
 const deleteMoment = asyncHandler(async (req, res) => {
     const { momentId } = req.params;
+    const userId = req.user?._id;
 
+    // Login required
+    if (!userId) {
+        throw new ApiError(
+            401,
+            "Unauthorized request"
+        );
+    }
+
+    // Validate Moment ID
     if (!mongoose.Types.ObjectId.isValid(momentId)) {
         throw new ApiError(
             400,
@@ -537,31 +744,27 @@ const deleteMoment = asyncHandler(async (req, res) => {
         );
     }
 
-    const moment = await Moment.findOne({
-        _id: momentId,
-        owner: req.user._id
-    });
+    const session = await mongoose.startSession();
+    try {
+        await session.withTransaction(async () => {
+            const moment = await Moment.findOne({ _id: momentId, owner: userId })
+                .select("owner mediaUrl mediaPublicId mediaType +mediaDeliveryType +mediaResourceType +mediaRegistry")
+                .session(session).lean();
+            if (!moment) throw new ApiError(404, "Moment not found");
 
-    if (!moment) {
-        throw new ApiError(
-            404,
-            "Moment not found"
-        );
+            await recordMomentMedia(moment, { session });
+            await MomentView.deleteMany({ moment: moment._id }, { session });
+            await Moment.deleteOne({ _id: moment._id, owner: userId }, { session });
+        });
+    } finally {
+        await session.endSession();
     }
-
-    await Moment.deleteOne({
-        _id: momentId
-    });
-
-    await MomentView.deleteMany({
-        moment: momentId
-    });
 
     return res.status(200).json(
         new ApiResponse(
             200,
             null,
-            "Moment deleted successfully"
+            "Moment deleted; media cleanup is pending review"
         )
     );
 });
