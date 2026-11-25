@@ -1,28 +1,27 @@
-import PropTypes from "prop-types";
-
 function MainContent({ children }) {
   return (
     <main
+      id="main-content"
+      tabIndex={0}
       className="
+        relative
+        min-h-0
         min-w-0
+        w-full
         flex-1
-        overflow-y-auto
         overflow-x-hidden
-        bg-[#070a0e]
-
+        overflow-y-auto
+        overscroll-y-contain
+        bg-[#08090d]
+        text-white
         [scrollbar-width:none]
         [&::-webkit-scrollbar]:hidden
+        focus:outline-none
       "
     >
-      <div className="min-h-full w-full">
-        {children}
-      </div>
+      {children}
     </main>
   );
 }
-
-MainContent.propTypes = {
-  children: PropTypes.node.isRequired,
-};
 
 export default MainContent;

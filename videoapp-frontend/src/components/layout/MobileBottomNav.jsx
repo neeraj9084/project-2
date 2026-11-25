@@ -1,5 +1,6 @@
 import PropTypes from "prop-types";
 import { NavLink, useNavigate } from "react-router-dom";
+
 import {
   Bell,
   Home,
@@ -41,81 +42,92 @@ function MobileBottomNav({
 }) {
   const navigate = useNavigate();
 
-  const handleCreate = () => {
-    navigate("/upload");
-  };
-
   return (
     <nav
       aria-label="Mobile navigation"
       className="
-        fixed
-        bottom-0
-        left-0
-        right-0
-        z-50
-        border-t
-        border-white/[0.08]
-        bg-[#090c10]/95
-        backdrop-blur-xl
-        md:hidden
+        fixed inset-x-0 bottom-0 z-50 md:hidden
+        border-t border-white/[0.09]
+        bg-[#090910]/75
+        backdrop-blur-2xl
+        backdrop-saturate-150
+        shadow-[0_-8px_35px_rgba(0,0,0,0.20)]
+        pb-[env(safe-area-inset-bottom)]
       "
     >
-      <div className="mx-auto flex h-[68px] max-w-md items-center justify-around px-2">
-        {/* Home */}
-        <MobileNavItem
-          item={NAV_ITEMS[0]}
-        />
+      {/* Subtle liquid-glass reflection */}
+      <div
+        aria-hidden="true"
+        className="
+          pointer-events-none absolute inset-0
+          bg-gradient-to-b
+          from-white/[0.045]
+          via-transparent
+          to-violet-500/[0.035]
+        "
+      />
 
-        {/* Search */}
-        <MobileNavItem
-          item={NAV_ITEMS[1]}
-        />
+      <div
+        className="
+          relative mx-auto flex h-[68px] max-w-md
+          items-center justify-around px-2
+        "
+      >
+        <MobileNavItem item={NAV_ITEMS[0]} />
 
-        {/* Create */}
+        <MobileNavItem item={NAV_ITEMS[1]} />
+
+        {/* Create button */}
         <button
           type="button"
-          onClick={handleCreate}
-          aria-label="Create"
+          onClick={() => navigate("/upload")}
+          aria-label="Create or upload video"
           className="
-            flex
-            h-11
-            w-11
-            items-center
-            justify-center
-
-            rounded-full
-
-            bg-[#776cff]
-            text-white
-
-            shadow-[0_0_20px_rgba(119,108,255,0.18)]
-
-            transition
-
-            hover:brightness-110
+            group relative flex h-12 w-12 shrink-0
+            items-center justify-center
+            overflow-hidden rounded-[18px]
+            border border-violet-300/25
+            bg-violet-400/[0.10]
+            text-violet-100
+            shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]
+            backdrop-blur-2xl
+            transition-all duration-300
+            hover:border-violet-200/40
+            hover:bg-violet-400/[0.17]
+            hover:shadow-[0_0_22px_rgba(139,92,246,0.20)]
             active:scale-95
-
-            focus:outline-none
-            focus:ring-2
-            focus:ring-[#8d85ff]/60
+            focus-visible:outline-none
+            focus-visible:ring-2
+            focus-visible:ring-violet-400/60
           "
         >
+          <span
+            aria-hidden="true"
+            className="
+              pointer-events-none absolute inset-0
+              bg-gradient-to-br
+              from-white/[0.16]
+              via-transparent
+              to-violet-400/[0.10]
+              opacity-80
+            "
+          />
+
           <Plus
             size={25}
-            strokeWidth={1.8}
+            strokeWidth={1.7}
+            className="
+              relative transition-transform duration-300
+              group-hover:rotate-90
+            "
           />
         </button>
 
-        {/* Notifications */}
         <MobileNavItem
           item={NAV_ITEMS[2]}
-          notificationCount={
-            notificationCount
-          }
+          notificationCount={notificationCount}
         />
 
-        {/* Profile */}
         <MobileNavItem
           item={{
             ...NAV_ITEMS[3],
@@ -132,110 +144,112 @@ function MobileNavItem({
   notificationCount = 0,
 }) {
   const Icon = item.icon;
+  const hasNotifications =
+    item.id === "notifications" && notificationCount > 0;
+
+  const badgeText =
+    notificationCount > 99 ? "99+" : notificationCount;
 
   return (
     <NavLink
       to={item.path}
       end={item.id === "home"}
-      aria-label={item.label}
-      className={({ isActive }) => `
-        relative
-        flex
-        min-w-[58px]
-        flex-col
-        items-center
-        justify-center
-        gap-1
-        rounded-xl
-        px-2
-        py-1.5
-
-        transition
-
-        focus:outline-none
-        focus:ring-2
-        focus:ring-[#766cff]/50
-
-        ${
-          isActive
-            ? "text-[#8b82ff]"
-            : "text-white/45 hover:text-white/80"
-        }
-      `}
+      aria-label={
+        hasNotifications
+          ? `${item.label}, ${badgeText} notifications`
+          : item.label
+      }
+      className="group/nav flex min-w-[58px] flex-col items-center justify-center gap-1"
     >
       {({ isActive }) => (
         <>
-          <span className="relative">
-            <Icon
-              size={20}
-              strokeWidth={
-                isActive ? 2.2 : 1.8
-              }
-            />
-
-            {item.id ===
-              "notifications" &&
-              notificationCount > 0 && (
-                <span
-                  className="
-                    absolute
-                    -right-2
-                    -top-2
-
-                    flex
-                    min-h-4
-                    min-w-4
-
-                    items-center
-                    justify-center
-
-                    rounded-full
-                    bg-[#ff3850]
-
-                    px-1
-
-                    text-[8px]
-                    font-bold
-                    leading-none
-                    text-white
-
-                    ring-2
-                    ring-[#090c10]
-                  "
-                >
-                  {notificationCount > 99
-                    ? "99+"
-                    : notificationCount}
-                </span>
-              )}
-          </span>
-
+          {/* Translucent icon bubble */}
           <span
             className={`
-              text-[10px]
-              font-medium
+              relative flex h-9 w-11 items-center justify-center
+              overflow-hidden rounded-2xl border
+              transition-all duration-300 ease-out
               ${
                 isActive
-                  ? "text-[#8b82ff]"
-                  : "text-white/40"
+                  ? `
+                    border-white/[0.13]
+                    bg-white/[0.075]
+                    text-violet-200
+                    shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_0_14px_rgba(139,92,246,0.08)]
+                    backdrop-blur-xl
+                  `
+                  : `
+                    border-transparent
+                    bg-transparent
+                    text-white/45
+                    group-hover/nav:border-white/[0.07]
+                    group-hover/nav:bg-white/[0.035]
+                    group-hover/nav:text-white/85
+                  `
+              }
+            `}
+          >
+            {isActive && (
+              <span
+                aria-hidden="true"
+                className="
+                  pointer-events-none absolute inset-0
+                  bg-gradient-to-br
+                  from-white/[0.10]
+                  via-transparent
+                  to-violet-400/[0.06]
+                "
+              />
+            )}
+
+            <Icon
+              size={20}
+              strokeWidth={isActive ? 2 : 1.7}
+              aria-hidden="true"
+              className="relative z-10 transition-transform duration-200 group-active/nav:scale-90"
+            />
+
+            {hasNotifications && (
+              <span
+                className="
+                  absolute right-0.5 top-0.5 z-20
+                  flex h-4 min-w-4 items-center justify-center
+                  rounded-full border border-[#090910]
+                  bg-violet-400 px-1
+                  text-[8px] font-bold leading-none text-white
+                "
+              >
+                {badgeText}
+              </span>
+            )}
+          </span>
+
+          {/* Navigation label */}
+          <span
+            className={`
+              text-[10px] leading-3 transition-colors duration-200
+              ${
+                isActive
+                  ? "font-semibold text-white/90"
+                  : "font-medium text-white/40 group-hover/nav:text-white/70"
               }
             `}
           >
             {item.label}
           </span>
 
-          {isActive && (
+          {/* Active indicator */}
+          {isActive ? (
             <span
+              aria-hidden="true"
               className="
-                absolute
-                bottom-0
-                h-0.5
-                w-5
-                rounded-full
-                bg-[#766cff]
+                absolute bottom-[3px]
+                h-[2px] w-4 rounded-full
+                bg-violet-300/90
+                shadow-[0_0_8px_rgba(167,139,250,0.45)]
               "
             />
-          )}
+          ) : null}
         </>
       )}
     </NavLink>
@@ -244,6 +258,16 @@ function MobileNavItem({
 
 MobileBottomNav.propTypes = {
   profilePath: PropTypes.string,
+  notificationCount: PropTypes.number,
+};
+
+MobileNavItem.propTypes = {
+  item: PropTypes.shape({
+    id: PropTypes.string.isRequired,
+    label: PropTypes.string.isRequired,
+    path: PropTypes.string.isRequired,
+    icon: PropTypes.elementType.isRequired,
+  }).isRequired,
   notificationCount: PropTypes.number,
 };
 

@@ -1,29 +1,195 @@
 @import "tailwindcss";
 
 :root {
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
+  color-scheme: light;
+
+  --app-bg: #f6f7fb;
+  --app-surface: #ffffff;
+  --app-surface-muted: #f0f2f7;
+  --app-border: #e5e7eb;
+  --app-text: #171923;
+  --app-text-secondary: #606779;
+  --app-text-muted: #858b9b;
+  --app-accent: #6d45d9;
 }
 
 html {
-  background: #08090d;
+  color-scheme: light;
+  background: var(--app-bg);
 }
 
 body {
-  margin: 0;
-  min-width: 320px;
   min-height: 100vh;
-  background: #08090d;
+  background: var(--app-bg) !important;
+  color: var(--app-text) !important;
 }
 
-* {
-  box-sizing: border-box;
+#root {
+  min-height: 100vh;
+  background: var(--app-bg);
 }
 
-button,
+/* Main dark page backgrounds -> clean white canvas */
+
+[class*="bg-[#08090d]"],
+[class*="bg-[#080a0e]"] {
+  background-color: var(--app-bg) !important;
+}
+
+[class*="bg-[#101117]"],
+[class*="bg-[#101116]"],
+[class*="bg-[#121319]"],
+[class*="bg-[#14151b]"],
+[class*="bg-[#14171e]"],
+[class*="bg-[#151218]"],
+[class*="bg-[#15161c]"],
+[class*="bg-[#15161d]"],
+[class*="bg-[#171720]"],
+[class*="bg-[#171a21]"],
+[class*="bg-[#191922]"],
+[class*="bg-[#191a21]"] {
+  background-color: var(--app-surface) !important;
+}
+
+/* Muted surfaces and placeholders */
+
+[class*="bg-[#20212a]"],
+[class*="bg-[#20242c]"],
+[class*="bg-[#22232c]"],
+[class*="bg-[#24252d]"],
+[class*="bg-[#252630]"],
+[class*="bg-[#252830]"],
+[class*="bg-[#252934]"],
+[class*="bg-[#272832]"],
+[class*="bg-[#292a34]"],
+[class*="bg-[#30313d]"] {
+  background-color: var(--app-surface-muted) !important;
+}
+
+/* Borders across cards, panels and sections */
+
+[class*="border-white/"],
+[class*="border-[#252830]"],
+[class*="border-[#252830]"],
+[class*="border-[#30313a]"] {
+  border-color: var(--app-border) !important;
+}
+
+/* Primary white text -> dark text */
+
+[class~="text-white"],
+[class*="text-white/"] {
+  color: var(--app-text) !important;
+}
+
+/* Existing secondary text utilities */
+
+[class~="text-gray-100"],
+[class~="text-gray-200"] {
+  color: #374151 !important;
+}
+
+[class~="text-gray-300"] {
+  color: #4b5563 !important;
+}
+
+[class~="text-gray-400"],
+[class~="text-gray-500"],
+[class~="text-gray-600"] {
+  color: var(--app-text-secondary) !important;
+}
+
+/* Keep white text on strong colored buttons and dark overlays */
+
+:is(
+  [class*="bg-violet-600"],
+  [class*="bg-violet-700"],
+  [class*="bg-blue-600"],
+  [class*="bg-blue-700"],
+  [class*="bg-purple-600"],
+  [class*="bg-red-600"],
+  [class*="bg-rose-600"],
+  [class*="bg-black/"],
+  [class~="bg-black"]
+),
+:is(
+  [class*="bg-violet-600"],
+  [class*="bg-violet-700"],
+  [class*="bg-blue-600"],
+  [class*="bg-blue-700"],
+  [class*="bg-purple-600"],
+  [class*="bg-red-600"],
+  [class*="bg-rose-600"],
+  [class*="bg-black/"],
+  [class~="bg-black"]
+) * {
+  color: #ffffff !important;
+}
+
+/* Search fields and text inputs */
+
 input,
 textarea,
 select {
-  font: inherit;
+  color: #171923;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #858b9b;
+  opacity: 1;
+}
+
+/* Menus and hover surfaces */
+
+[class*="hover:bg-white/"]:hover {
+  background-color: #e9ebf2 !important;
+}
+
+[class~="hover:text-white"]:hover {
+  color: var(--app-text) !important;
+}
+
+/* Keep the video playback area genuinely black */
+
+video,
+video:fullscreen {
+  background-color: #000000;
+}
+
+/* Light scrollbar */
+
+* {
+  scrollbar-color: #c8ccd7 #f6f7fb;
+}
+
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #f6f7fb;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #c8ccd7;
+  border: 2px solid #f6f7fb;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #a8afc0;
+}
+
+/* Respect reduced-motion accessibility preferences */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -1,9 +1,9 @@
-import { NavLink } from "react-router-dom";
+
+import { NavLink, useLocation } from "react-router-dom";
 import PropTypes from "prop-types";
+
 import {
   Bell,
-  ChevronLeft,
-  ChevronRight,
   Clock3,
   Compass,
   Film,
@@ -16,298 +16,265 @@ import {
   UserRound,
 } from "lucide-react";
 
-import SidebarSection from "./SidebarSection";
-
 const DEFAULT_USER = {
   fullName: "Neeraj Saini",
   username: "neeraj@11",
   avatar: "",
 };
 
-const NAVIGATION_SECTIONS = [
-  {
-    id: "main",
-    label: "Main",
-    items: [
-      {
-        label: "Home",
-        path: "/home",
-        icon: Home,
-      },
-      {
-        label: "Explore",
-        path: "/explore",
-        icon: Compass,
-      },
-      {
-        label: "Subscriptions",
-        path: "/subscriptions",
-        icon: Radio,
-      },
-    ],
-  },
-  {
-    id: "library",
-    label: "Library",
-    items: [
-      {
-        label: "History",
-        path: "/history",
-        icon: Clock3,
-      },
-      {
-        label: "Your Videos",
-        path: "/my-videos",
-        icon: Film,
-      },
-      {
-        label: "Liked Videos",
-        path: "/liked",
-        icon: Heart,
-      },
-      {
-        label: "Playlists",
-        path: "/playlists",
-        icon: FolderKanban,
-      },
-    ],
-  },
-  {
-    id: "social",
-    label: "Social",
-    items: [
-      {
-        label: "Messages",
-        path: "/messages",
-        icon: MessageCircle,
-      },
-      {
-        label: "Notifications",
-        path: "/notifications",
-        icon: Bell,
-      },
-      {
-        label: "Create Moment",
-        path: "/moments/create",
-        icon: PlusSquare,
-      },
-    ],
-  },
+const ITEMS = [
+  { label: "Home", path: "/home", icon: Home },
+  { label: "Explore", path: "/explore", icon: Compass },
+  { label: "Subscriptions", path: "/subscriptions", icon: Radio },
+  { label: "History", path: "/history", icon: Clock3 },
+  { label: "Your Videos", path: "/my-videos", icon: Film },
+  { label: "Liked Videos", path: "/liked", icon: Heart },
+  { label: "Playlists", path: "/playlists", icon: FolderKanban },
+  { label: "Messages", path: "/messages", icon: MessageCircle },
+  { label: "Notifications", path: "/notifications", icon: Bell },
+  { label: "Create Moment", path: "/moments/create", icon: PlusSquare },
 ];
+
+const bubbleStyle = {
+  background:
+    "radial-gradient(circle at 30% 20%, #fff 0%, #fbcfe8 28%, #f472b6 70%, #f9a8d4 100%)",
+  border: "1px solid rgba(249,168,212,.8)",
+  boxShadow:
+    "inset 0 2px 5px rgba(255,255,255,.85), 0 0 14px rgba(244,114,182,.2)",
+};
 
 function Sidebar({
   user = DEFAULT_USER,
-  collapsed = false,
-  onCollapseChange,
+  collapsed = true,
+  hovered = false,
+  onHoverChange,
   unreadNotifications = 0,
   unreadMessages = 0,
 }) {
-  const displayName =
-    user?.fullName || DEFAULT_USER.fullName;
+  const { pathname } = useLocation();
 
-  const username =
-    user?.username || DEFAULT_USER.username;
+  const compact = collapsed && !hovered;
 
-  const avatar =
-    user?.avatar || "";
+  const displayName = user?.fullName || DEFAULT_USER.fullName;
 
-  const handleCollapse = () => {
-    onCollapseChange?.(!collapsed);
+  const username = String(
+    user?.username || DEFAULT_USER.username
+  ).replace(/^@+/, "");
+
+  const avatar = user?.avatar || user?.avatarUrl || "";
+
+  const isActive = (path) => {
+    if (path === "/home") {
+      return pathname === "/" || pathname === "/home";
+    }
+
+    return pathname === path || pathname.startsWith(`${path}/`);
+  };
+
+  const getUnreadCount = (label) => {
+    if (label === "Notifications") return unreadNotifications;
+    if (label === "Messages") return unreadMessages;
+    return 0;
   };
 
   return (
     <aside
       aria-label="Sidebar navigation"
+      onMouseEnter={() => onHoverChange?.(true)}
+      onMouseLeave={() => onHoverChange?.(false)}
       className="
-        group
-        relative
-        hidden
-        h-full
-        w-full
-        border-r
-        border-white/[0.08]
-        bg-[#090c10]
-        md:block
+        relative h-full w-full min-w-0 overflow-hidden
+        border-r border-white/[0.07]
+        bg-[#11101b]/85
+        text-slate-200
+        backdrop-blur-3xl
       "
     >
-      {/* Collapse Button */}
-      <button
-        type="button"
-        onClick={handleCollapse}
-        aria-label={
-          collapsed
-            ? "Expand sidebar"
-            : "Collapse sidebar"
-        }
+      {/* Transparent glass reflection */}
+      <div
+        aria-hidden="true"
         className="
-          absolute
-          right-2
-          top-3
-          z-30
-
-          flex
-          h-8
-          w-8
-          items-center
-          justify-center
-
-          rounded-full
-          border
-          border-white/[0.08]
-          bg-[#12171d]
-          text-white/45
-
-          opacity-0
-          pointer-events-none
-
-          shadow-lg
-          shadow-black/30
-
-          transition-all
-          duration-200
-
-          group-hover:pointer-events-auto
-          group-hover:opacity-100
-
-          focus:pointer-events-auto
-          focus:opacity-100
-
-          hover:border-[#766cff]/40
-          hover:bg-[#766cff]/10
-          hover:text-white
-
-          focus:outline-none
-          focus:ring-2
-          focus:ring-[#766cff]/50
+          pointer-events-none absolute inset-0
+          bg-gradient-to-b
+          from-white/[0.025]
+          via-transparent
+          to-pink-400/[0.025]
         "
-      >
-        {collapsed ? (
-          <ChevronRight
-            size={16}
-            strokeWidth={2}
-          />
-        ) : (
-          <ChevronLeft
-            size={16}
-            strokeWidth={2}
-          />
-        )}
-      </button>
+      />
 
-      <div className="flex h-full flex-col">
+      <div className="relative flex h-full min-w-0 flex-col">
         {/* Navigation */}
-        <div
+        <nav
+          aria-label="Main navigation"
           className="
-            min-h-0
-            flex-1
-            overflow-y-auto
-
-            px-3
-            pb-5
-            pt-14
-
+            flex min-h-0 flex-1 flex-col items-center
+            gap-2 overflow-x-hidden overflow-y-auto
+            px-2 py-4
             [scrollbar-width:none]
             [&::-webkit-scrollbar]:hidden
           "
         >
-          {NAVIGATION_SECTIONS.map((section) => (
-            <SidebarSection
-              key={section.id}
-              section={section}
-              collapsed={collapsed}
-              unreadNotifications={
-                unreadNotifications
-              }
-              unreadMessages={unreadMessages}
-            />
-          ))}
-        </div>
+          {ITEMS.map(({ label, path, icon: Icon }) => {
+            const active = isActive(path);
+            const count = getUnreadCount(label);
 
-        {/* User Footer */}
-        <div
-          className="
-            shrink-0
-            border-t
-            border-white/[0.08]
-            p-3
-          "
-        >
-          <NavLink
-            to={`/profile/${encodeURIComponent(username)}`}
-            aria-label={`Open ${displayName} profile`}
-            title={
-              collapsed
-                ? `@${username}`
-                : undefined
-            }
-            className={`
-              flex
-              w-full
-              items-center
-              rounded-xl
-              transition
-
-              hover:bg-white/[0.04]
-
-              focus:outline-none
-              focus:ring-2
-              focus:ring-[#766cff]/50
-
-              ${
-                collapsed
-                  ? "justify-center py-2"
-                  : "gap-3 px-2.5 py-2.5"
-              }
-            `}
-          >
-            {avatar ? (
-              <img
-                src={avatar}
-                alt={`${displayName} avatar`}
+            return (
+              <NavLink
+                key={path}
+                to={path}
+                end={path === "/home"}
+                title={compact ? label : undefined}
+                aria-label={label}
+                aria-current={active ? "page" : undefined}
                 className="
-                  h-9
-                  w-9
-                  shrink-0
-                  rounded-full
-                  border
-                  border-white/[0.10]
-                  object-cover
-                "
-              />
-            ) : (
-              <div
-                className="
-                  flex
-                  h-9
-                  w-9
-                  shrink-0
-                  items-center
-                  justify-center
-
-                  rounded-full
-                  border
-                  border-white/[0.10]
-                  bg-[#12171d]
+                  group/item flex min-h-12 w-full shrink-0
+                  items-center rounded-xl
+                  border border-transparent
+                  px-1.5
+                  text-slate-300 no-underline
+                  transition-colors duration-200
+                  hover:bg-white/[0.025]
+                  focus-visible:outline-none
+                  focus-visible:ring-2
+                  focus-visible:ring-pink-300/70
                 "
               >
-                <UserRound
-                  size={17}
-                  strokeWidth={1.8}
-                  className="text-white/55"
-                />
-              </div>
-            )}
+                {/* Icon and water-bubble effect */}
+                <span
+                  className={`
+                    flex h-11 w-11 shrink-0
+                    items-center justify-center
+                    rounded-full border border-transparent
+                    transition-all duration-200
+                    ${compact ? "mx-auto" : "mr-3"}
+                    ${
+                      active
+                        ? "scale-100"
+                        : "group-hover/item:bg-white/[0.035]"
+                    }
+                  `}
+                  style={active ? bubbleStyle : undefined}
+                >
+                  <Icon
+                    size={21}
+                    strokeWidth={1.8}
+                    className={
+                      active
+                        ? "text-[#be185d]"
+                        : "text-[#d8d5e5] transition-colors duration-200 group-hover/item:text-pink-200"
+                    }
+                  />
+                </span>
 
-            {!collapsed && (
-              <div className="min-w-0">
-                <p className="truncate text-[13px] font-semibold text-white">
-                  {displayName}
-                </p>
+                {/* Label: black only while hovering */}
+                {!compact && (
+                  <span
+                    className={`
+                      min-w-0 flex-1 truncate
+                      text-[13px] font-medium
+                      transition-colors duration-150
+                      ${
+                        active
+                          ? "text-white"
+                          : "text-[#e5e2ef]"
+                      }
+                      group-hover/item:!text-black
+                    `}
+                  >
+                    {label}
+                  </span>
+                )}
 
-                <p className="truncate text-[12px] text-[#727b88]">
-                  @{username}
-                </p>
-              </div>
+                {/* Unread count */}
+                {!compact && count > 0 && (
+                  <span className="
+                    mr-2 rounded-full
+                    bg-pink-300/10 px-2 py-0.5
+                    text-[10px] font-semibold text-pink-200
+                  ">
+                    {count > 99 ? "99+" : count}
+                  </span>
+                )}
+              </NavLink>
+            );
+          })}
+        </nav>
+
+        {/* Current user's profile */}
+        <div className="relative shrink-0 border-t border-white/[0.08] p-2">
+          <NavLink
+            to="/profile"
+            end
+            title={compact ? `${displayName} (@${username})` : undefined}
+            aria-label="My profile"
+            className="
+              group/profile flex min-h-12 w-full min-w-0
+              items-center rounded-xl
+              border border-transparent px-1.5
+              transition-colors duration-200
+              hover:bg-white/[0.025]
+              focus-visible:outline-none
+              focus-visible:ring-2
+              focus-visible:ring-pink-300/70
+            "
+          >
+            {({ isActive: profileActive }) => (
+              <>
+                <span
+                  className={`
+                    flex h-11 w-11 shrink-0
+                    items-center justify-center
+                    rounded-full border border-transparent
+                    ${compact ? "mx-auto" : "mr-3"}
+                  `}
+                  style={profileActive ? bubbleStyle : undefined}
+                >
+                  {avatar ? (
+                    <img
+                      src={avatar}
+                      alt={displayName}
+                      loading="lazy"
+                      className="h-9 w-9 rounded-full object-cover"
+                    />
+                  ) : (
+                    <UserRound
+                      size={21}
+                      strokeWidth={1.8}
+                      className={
+                        profileActive
+                          ? "text-pink-800"
+                          : "text-slate-300"
+                      }
+                    />
+                  )}
+                </span>
+
+                {!compact && (
+                  <span className="min-w-0 flex-1">
+                    <span
+                      className="
+                        block truncate text-xs font-medium
+                        text-slate-100
+                        transition-colors duration-150
+                        group-hover/profile:!text-black
+                      "
+                    >
+                      {displayName}
+                    </span>
+
+                    <span
+                      className="
+                        mt-0.5 block truncate text-[11px]
+                        text-slate-400
+                        transition-colors duration-150
+                        group-hover/profile:!text-black
+                      "
+                    >
+                      @{username}
+                    </span>
+                  </span>
+                )}
+              </>
             )}
           </NavLink>
         </div>
@@ -321,9 +288,11 @@ Sidebar.propTypes = {
     fullName: PropTypes.string,
     username: PropTypes.string,
     avatar: PropTypes.string,
+    avatarUrl: PropTypes.string,
   }),
   collapsed: PropTypes.bool,
-  onCollapseChange: PropTypes.func,
+  hovered: PropTypes.bool,
+  onHoverChange: PropTypes.func,
   unreadNotifications: PropTypes.number,
   unreadMessages: PropTypes.number,
 };
