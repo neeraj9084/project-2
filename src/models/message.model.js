@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { mediaReferenceSchema } from "./mediaRegistryMetadata.js";
 
 const reactionSchema = new mongoose.Schema(
     {
@@ -33,6 +34,11 @@ const attachmentSchema = new mongoose.Schema(
             trim: true,
             default: null
         },
+
+        resourceType: { type: String, default: null },
+        deliveryType: { type: String, default: null },
+
+        mediaRegistry: { type: mediaReferenceSchema, default: undefined, select: false },
 
         fileName: {
             type: String,

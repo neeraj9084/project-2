@@ -1,4 +1,5 @@
 import mongoose, { Schema } from "mongoose";
+import { mediaRegistrySchema } from "./mediaRegistryMetadata.js";
 import mongooseAggregatePaginate from "mongoose-aggregate-paginate-v2";
 
 const videoSchema = new Schema(
@@ -46,6 +47,30 @@ const videoSchema = new Schema(
             default: true
         },
 
+        isDeleted: {
+            type: Boolean,
+            default: false
+        },
+
+        mediaRegistry: { type: mediaRegistrySchema, default: undefined, select: false },
+
+        deletedAt: {
+            type: Date,
+            default: null
+        },
+
+        deletionMedia: {
+            type: {
+                videoFile: String,
+                videoPublicId: String,
+                videoDeliveryType: String,
+                thumbnail: String,
+                thumbnailPublicId: String,
+                thumbnailDeliveryType: String
+            },
+            select: false
+        },
+
         owner: {
             type: Schema.Types.ObjectId,
             ref: "User",
@@ -58,6 +83,10 @@ const videoSchema = new Schema(
             required: [true, "Video public ID is required"],
             trim: true
         },
+
+        videoDeliveryType: { type: String, default: null, select: false },
+
+        thumbnailDeliveryType: { type: String, default: null, select: false },
 
         thumbnailPublicId: {
             type: String,

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { mediaRegistrySchema } from "./mediaRegistryMetadata.js";
 import bcrypt from "bcrypt";
 
 const pendingUserSchema = new mongoose.Schema(
@@ -52,6 +53,8 @@ const pendingUserSchema = new mongoose.Schema(
             type: String,
             default: "",
         },
+
+        mediaRegistry: { type: mediaRegistrySchema, default: undefined, select: false },
 
         // ==========================================
         // EMAIL VERIFICATION OTP

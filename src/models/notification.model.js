@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { mediaRegistrySchema } from "./mediaRegistryMetadata.js";
 
 const notificationSchema = new mongoose.Schema(
     {
@@ -63,6 +64,8 @@ const notificationSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.Mixed,
             default: {},
         },
+
+        mediaRegistry: { type: mediaRegistrySchema, default: undefined, select: false },
 
         isRead: {
             type: Boolean,

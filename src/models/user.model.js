@@ -1,4 +1,5 @@
 import mongoose, { Schema } from "mongoose";
+import { mediaRegistrySchema } from "./mediaRegistryMetadata.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 
@@ -47,6 +48,12 @@ const userSchema = new Schema(
             type: String,
             default: "",
         },
+
+        avatarPublicId: { type: String, default: null, select: false },
+        coverImagePublicId: { type: String, default: null, select: false },
+        avatarDeliveryType: { type: String, default: null, select: false },
+        coverImageDeliveryType: { type: String, default: null, select: false },
+        mediaRegistry: { type: mediaRegistrySchema, default: undefined, select: false },
 
         watchHistory: [
             {
@@ -136,6 +143,44 @@ const userSchema = new Schema(
         isActive: {
             type: Boolean,
             default: true,
+        },
+
+        deletionRequestedAt: {
+            type: Date,
+            default: null,
+        },
+
+        anonymizedAt: {
+            type: Date,
+            default: null,
+        },
+
+        databaseCleanupStatus: {
+            type: String,
+            enum: ["pending", "complete"],
+            default: "pending",
+        },
+
+        databaseCleanupCompletedAt: {
+            type: Date,
+            default: null,
+        },
+
+        databaseCleanupClaim: {
+            type: String,
+            select: false,
+        },
+
+        deletionMedia: {
+            type: {
+                avatar: { type: String, default: "" },
+                coverImage: { type: String, default: "" },
+                avatarPublicId: { type: String, default: null },
+                coverImagePublicId: { type: String, default: null },
+                avatarDeliveryType: { type: String, default: null },
+                coverImageDeliveryType: { type: String, default: null },
+            },
+            select: false,
         },
 
         role: {

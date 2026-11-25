@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { mediaRegistrySchema } from "./mediaRegistryMetadata.js";
 
 const directReadStatusSchema = new mongoose.Schema(
     {
@@ -11,6 +12,16 @@ const directReadStatusSchema = new mongoose.Schema(
         lastReadAt: {
             type: Date,
             default: null
+        },
+
+        clearedAt: {
+            type: Date,
+            default: null
+        },
+
+        isHidden: {
+            type: Boolean,
+            default: false
         }
     },
     {
@@ -47,6 +58,8 @@ const conversationSchema = new mongoose.Schema(
             trim: true,
             default: null
         },
+
+        mediaRegistry: { type: mediaRegistrySchema, default: undefined, select: false },
 
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,

@@ -1,4 +1,5 @@
 import mongoose, { Schema } from "mongoose";
+import { mediaRegistrySchema } from "./mediaRegistryMetadata.js";
 
 const momentMusicSchema = new Schema(
     {
@@ -79,6 +80,20 @@ const momentSchema = new Schema(
             required: [true, "Moment media type is required"]
         },
 
+        mediaDeliveryType: {
+            type: String,
+            default: null,
+            select: false
+        },
+
+        mediaResourceType: {
+            type: String,
+            default: null,
+            select: false
+        },
+
+        mediaRegistry: { type: mediaRegistrySchema, default: undefined, select: false },
+
         caption: {
             type: String,
             trim: true,
@@ -112,15 +127,6 @@ momentSchema.index({
     owner: 1,
     createdAt: -1
 });
-
-momentSchema.index(
-    {
-        expiresAt: 1
-    },
-    {
-        expireAfterSeconds: 0
-    }
-);
 
 export const Moment =
     mongoose.models.Moment ||

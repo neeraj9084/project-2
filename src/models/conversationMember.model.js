@@ -37,6 +37,16 @@ const conversationMemberSchema = new mongoose.Schema({
         default: null
     },
 
+    clearedAt: {
+        type: Date,
+        default: null
+    },
+
+    isHidden: {
+        type: Boolean,
+        default: false
+    },
+
     mutedUntil: {
         type: Date,
         default: null
@@ -59,4 +69,4 @@ conversationMemberSchema.index(
         );
 
   export const ConversationMember = 
-  mongoose.model("ConversationMember", conversationMemberSchema);      
+  mongoose.model("ConversationMember", conversationMemberSchema);
