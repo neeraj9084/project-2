@@ -1,127 +1,76 @@
-import { Camera } from "lucide-react";
-import PropTypes from "prop-types";
+import { Camera, ImagePlus, LoaderCircle } from "lucide-react";
 
-const DEFAULT_COVER =
-  "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=1800&q=85";
-
-function ProfileCover({
-  image = DEFAULT_COVER,
+export default function ProfileCover({
+  image = "",
   editable = false,
+  loading = false,
   onEdit,
 }) {
-  const handleEdit = () => {
-    if (typeof onEdit === "function") {
-      onEdit();
-    }
-  };
-
   return (
-    <div className="relative w-full">
-      {/* Cover */}
-      <div
-        className="
-          relative
-          w-full
-          overflow-hidden
-          bg-[#0b0f14]
-
-          h-[180px]
-          sm:h-[220px]
-          md:h-[250px]
-          lg:h-[260px]
-
-          md:rounded-b-[14px]
-        "
-      >
+    <div className="group relative isolate aspect-[3/1] min-h-[150px] w-full overflow-hidden rounded-2xl border border-gray-200 bg-gray-100 shadow-sm sm:min-h-[190px] sm:rounded-3xl">
+      {/* Cover Image */}
+      {image ? (
         <img
-          src={image || DEFAULT_COVER}
+          src={image}
           alt="Profile cover"
-          className="
-            h-full
-            w-full
-            object-cover
-            object-center
-          "
+          draggable="false"
+          className="absolute inset-0 h-full w-full select-none object-cover object-center"
         />
+      ) : (
+        <div className="absolute inset-0 overflow-hidden bg-gradient-to-br from-violet-50 via-white to-orange-50">
+          <div className="absolute -right-10 -top-16 h-56 w-56 rounded-full bg-white/80 blur-2xl" />
 
-        {/* Dark overlay */}
-        <div
-          className="
-            pointer-events-none
-            absolute
-            inset-0
-            bg-gradient-to-b
-            from-black/5
-            via-black/0
-            to-black/25
-          "
-        />
+          <div className="absolute -bottom-24 left-1/4 h-56 w-56 rounded-full bg-violet-100/60 blur-3xl" />
 
-        {/* Edit Cover */}
-        {editable && (
-          <button
-            type="button"
-            onClick={handleEdit}
-            aria-label="Edit cover photo"
-            className="
-              absolute
-              right-4
-              top-4
+          <div className="relative flex h-full items-center justify-center text-gray-400">
+            <ImagePlus size={38} strokeWidth={1.5} />
+          </div>
+        </div>
+      )}
 
-              flex
-              h-10
-              items-center
-              gap-2
+      {/* Subtle image overlay */}
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/[0.04] via-transparent to-black/[0.06]" />
 
-              rounded-xl
-
-              border
-              border-white/[0.12]
-
-              bg-[#171920]/85
-              px-3.5
-
-              text-[12px]
-              font-medium
-              text-white
-
-              backdrop-blur-md
-
-              shadow-lg
-              shadow-black/20
-
-              transition
-
-              hover:bg-[#20242d]
-              hover:border-white/[0.18]
-
-              focus:outline-none
-              focus:ring-2
-              focus:ring-[#766cff]/60
-
-              md:right-5
-              md:top-4
-            "
-          >
-            <Camera
-              size={16}
-              strokeWidth={1.9}
+      {/* Edit Cover Button */}
+      {editable && (
+        <button
+          type="button"
+          onClick={onEdit}
+          disabled={loading}
+          aria-label={loading ? "Uploading cover image" : "Edit cover image"}
+          title={loading ? "Uploading cover image" : "Edit cover"}
+          className="absolute right-3 top-3 inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm font-semibold !text-gray-800 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-gray-300 hover:bg-gray-50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60 sm:right-4 sm:top-4"
+          style={{
+            color: "#1f2937",
+            backgroundColor: "#ffffff",
+          }}
+        >
+          {loading ? (
+            <LoaderCircle
+              size={17}
+              strokeWidth={2}
+              className="shrink-0 animate-spin !text-gray-800"
+              style={{ color: "#1f2937" }}
+              aria-hidden="true"
             />
+          ) : (
+            <Camera
+              size={17}
+              strokeWidth={1.9}
+              className="shrink-0 !text-gray-800"
+              style={{ color: "#1f2937" }}
+              aria-hidden="true"
+            />
+          )}
 
-            <span className="hidden sm:inline">
-              Edit Cover
-            </span>
-          </button>
-        )}
-      </div>
+          <span
+            className="whitespace-nowrap !text-gray-800"
+            style={{ color: "#1f2937" }}
+          >
+            {loading ? "Uploading..." : "Edit cover"}
+          </span>
+        </button>
+      )}
     </div>
   );
 }
-
-ProfileCover.propTypes = {
-  image: PropTypes.string,
-  editable: PropTypes.bool,
-  onEdit: PropTypes.func,
-};
-
-export default ProfileCover;
