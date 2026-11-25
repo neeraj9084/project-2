@@ -45,45 +45,15 @@ const uploadOnCloudinary = async (localFilePath) => {
 
 //================ Delete From Cloudinary =================//
 
-const deleteFromCloudinary = async (
-    publicId,
-    resourceType = "image"
-) => {
-    try {
-
-        if (!publicId) {
-            return null;
-        }
-
-        const response =
-            await cloudinary.uploader.destroy(
-                publicId,
-                {
-                    resource_type: resourceType
-                }
-            );
-
-        console.log(
-            "Cloudinary delete response:",
-            response
-        );
-
-        return response;
-
-    } catch (error) {
-
-        console.log(
-            "CLOUDINARY DELETE ERROR:",
-            error
-        );
-
-        return null;
-    }
+const deleteFromCloudinary = async () => {
+    throw new Error("Direct Cloudinary deletion is disabled; use the media cleanup queue");
 };
+
+const getCloudinaryCloudName = () => cloudinary.config().cloud_name;
 
 
 export {
-    cloudinary,
+    getCloudinaryCloudName,
     uploadOnCloudinary,
     deleteFromCloudinary
 };

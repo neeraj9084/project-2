@@ -39,7 +39,9 @@ router
 // Get All Videos
 router
     .route("/")
-    .get(getAllVideos);
+    .get(
+        verifyJWT,
+        getAllVideos);
 
 
 // Get My Videos
@@ -67,11 +69,11 @@ router
         togglePublishStatus
     );
 
-
-// Get / Update / Delete Video
+// Get / Update / Delete Video - Login Required
 router
     .route("/:videoId")
     .get(
+        verifyJWT,
         getVideoById
     )
     .patch(
@@ -88,6 +90,5 @@ router
         verifyJWT,
         deleteVideo
     );
-
 
 export default router;

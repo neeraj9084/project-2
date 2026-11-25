@@ -101,6 +101,7 @@ const getWatchHistory = asyncHandler(async (req, res) => {
         .populate({
             path: "video",
             match: {
+                isDeleted: { $ne: true },
                 owner: {
                     $nin: blockedUserIds
                 }

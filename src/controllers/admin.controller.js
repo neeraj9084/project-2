@@ -14,6 +14,9 @@ import { UserReport } from "../models/userReport.model.js";
 import { Notification } from "../models/notification.model.js";
 import { Subscribe } from "../models/subscribe.model.js";
 import { AuditLog } from "../models/auditLog.model.js";
+import { tombstoneVideo } from "../services/tombstoneVideo.service.js";
+import { createThumbnailNotifications } from "../services/notificationThumbnailRegistry.service.js";
+import { AssetModerationHold } from "../models/assetModerationHold.model.js";
 
 
 //====================== getAdminOverview ==========================//
@@ -604,6 +607,7 @@ const updateVideoStatus = asyncHandler(async (req, res) => {
     const video = await Video.findOneAndUpdate(
         {
             _id: videoId,
+            isDeleted: { $ne: true },
         },
         {
             $set: {
@@ -630,7 +634,7 @@ const updateVideoStatus = asyncHandler(async (req, res) => {
     }
      
     try {
-    await Notification.create({
+    await createThumbnailNotifications({
         recipient: video.owner,
         actor: req.user._id,
         type: "system",
@@ -693,7 +697,7 @@ const deleteVideo = asyncHandler(async (req, res) => {
     try {
         session.startTransaction();
 
-        video = await Video.findById(videoId)
+        video = await Video.findOne({ _id: videoId, isDeleted: { $ne: true } })
             .select(
                 "_id videoFile thumbnail videoPublicId thumbnailPublicId owner"
             )
@@ -704,35 +708,7 @@ const deleteVideo = asyncHandler(async (req, res) => {
             throw new ApiError(404, "Video not found");
         }
 
-        await Video.deleteOne(
-            { _id: videoId },
-            { session }
-        );
-
-        await Like.deleteMany(
-            { video: videoId },
-            { session }
-        );
-
-        await Comment.deleteMany(
-            { video: videoId },
-            { session }
-        );
-
-        await Share.deleteMany(
-            { video: videoId },
-            { session }
-        );
-
-        await WatchHistory.updateMany(
-            {},
-            {
-                $pull: {
-                    videos: videoId,
-                },
-            },
-            { session }
-        );
+        await tombstoneVideo(videoId, { session });
 
         await session.commitTransaction();
 
@@ -743,50 +719,13 @@ const deleteVideo = asyncHandler(async (req, res) => {
         await session.endSession();
     }
 
-    const cloudinaryErrors = [];
-
-    if (video.videoPublicId) {
-        try {
-            await cloudinary.uploader.destroy(
-                video.videoPublicId,
-                {
-                    resource_type: "video",
-                }
-            );
-        } catch (error) {
-            cloudinaryErrors.push({
-                type: "video",
-                message: error.message,
-            });
-        }
-    }
-
-    if (video.thumbnailPublicId) {
-        try {
-            await cloudinary.uploader.destroy(
-                video.thumbnailPublicId,
-                {
-                    resource_type: "image",
-                }
-            );
-        } catch (error) {
-            cloudinaryErrors.push({
-                type: "thumbnail",
-                message: error.message,
-            });
-        }
-    }
-
     return res.status(200).json(
         new ApiResponse(
             200,
             {
                 videoId: video._id,
                 deleted: true,
-                cloudinaryCleanup:
-                    cloudinaryErrors.length === 0
-                        ? "completed"
-                        : "partial",
+                cloudinaryCleanup: "pending",
             },
             "Video deleted successfully"
         )
@@ -1299,7 +1238,13 @@ const updateVideoReportStatus = asyncHandler(async (req, res) => {
         );
     }
 
-    const report = await Report.findOneAndUpdate(
+    let report;
+    const session = await mongoose.startSession();
+    try { await session.withTransaction(async () => {
+    if (["pending", "reviewed"].includes(status) && await AssetModerationHold.exists({ caseType: "report", caseId: reportId, status: "released" }).session(session)) {
+        throw new ApiError(409, "Released moderation holds require a new investigation");
+    }
+    report = await Report.findOneAndUpdate(
         {
             _id: reportId,
         },
@@ -1326,7 +1271,8 @@ const updateVideoReportStatus = asyncHandler(async (req, res) => {
                 select: "_id username fullName avatar",
             },
         })
-        .lean();
+        .session(session).lean();
+    }); } finally { await session.endSession(); }
 
     if (!report) {
         throw new ApiError(404, "Video report not found");
@@ -2146,7 +2092,13 @@ const updateCopyrightClaimStatus = asyncHandler(async (req, res) => {
         );
     }
 
-    const claim = await CopyrightClaim.findByIdAndUpdate(
+    let claim;
+    const session = await mongoose.startSession();
+    try { await session.withTransaction(async () => {
+    if (status === "pending" && await AssetModerationHold.exists({ caseType: "copyright", caseId: claimId, status: "released" }).session(session)) {
+        throw new ApiError(409, "Released moderation holds require a new investigation");
+    }
+    claim = await CopyrightClaim.findByIdAndUpdate(
         claimId,
         {
             $set: {
@@ -2179,7 +2131,8 @@ const updateCopyrightClaimStatus = asyncHandler(async (req, res) => {
             path: "reviewedBy",
             select: "_id username fullName avatar",
         })
-        .lean();
+        .session(session).lean();
+    }); } finally { await session.endSession(); }
 
     if (!claim) {
         throw new ApiError(

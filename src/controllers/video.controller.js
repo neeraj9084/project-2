@@ -6,7 +6,10 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Video } from "../models/video.model.js";
-import { deleteFromCloudinary,uploadOnCloudinary } from "../utils/cloudinary.js";
+import { uploadOnCloudinary } from "../utils/cloudinary.js";
+import { videoUploadIdentity, registerVideoMedia, queueVideoMedia, unregisterVideoMedia } from "../services/videoAssetRegistry.service.js";
+import { tombstoneVideo } from "../services/tombstoneVideo.service.js";
+import { createThumbnailNotifications } from "../services/notificationThumbnailRegistry.service.js";
 import { compressVideo } from "../utils/ffmpeg.js";
 import { BlockedUser } from "../models/blockedUser.model.js";
 import { Subscribe } from "../models/subscribe.model.js";
@@ -28,8 +31,11 @@ const publishAVideo = asyncHandler(async (req, res) => {
     let compressedVideoPath = null;
     let thumbnailPath = null;
 
-    let uploadedVideoPublicId = null;
-    let uploadedThumbnailPublicId = null;
+    let uploadedVideo = null;
+    let uploadedThumbnail = null;
+    let committed = false;
+    const newVideoId = new mongoose.Types.ObjectId();
+    const uploadOwner = req.user?._id;
 
     try {
 
@@ -131,6 +137,8 @@ const publishAVideo = asyncHandler(async (req, res) => {
                 compressedVideoPath
             );
 
+        uploadedVideo = videoUpload;
+
         if (
             !videoUpload?.secure_url ||
             !videoUpload?.public_id
@@ -141,8 +149,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
             );
         }
 
-        uploadedVideoPublicId =
-            videoUpload.public_id;
+        const videoMetadata = videoUploadIdentity(videoUpload, "video");
 
         //================ UPLOAD THUMBNAIL =================//
 
@@ -150,6 +157,8 @@ const publishAVideo = asyncHandler(async (req, res) => {
             await uploadOnCloudinary(
                 thumbnailPath
             );
+
+        uploadedThumbnail = thumbnailUpload;
 
         if (
             !thumbnailUpload?.secure_url ||
@@ -161,8 +170,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
             );
         }
 
-        uploadedThumbnailPublicId =
-            thumbnailUpload.public_id;
+        const thumbnailMetadata = videoUploadIdentity(thumbnailUpload, "image");
 
         //================ VIDEO DURATION =================//
 
@@ -182,7 +190,15 @@ const publishAVideo = asyncHandler(async (req, res) => {
 
         //================ CREATE VIDEO =================//
 
-        const createdVideo = await Video.create({
+        let createdVideo;
+        const session = await mongoose.startSession();
+        try {
+            await session.withTransaction(async () => {
+                await registerVideoMedia({ metadata: videoMetadata, kind: "video", videoId: newVideoId, owner: userId, session });
+                await registerVideoMedia({ metadata: thumbnailMetadata, kind: "thumbnail", videoId: newVideoId, owner: userId, session });
+                [createdVideo] = await Video.create([{
+            _id: newVideoId,
+            mediaRegistry: { video: videoMetadata, thumbnail: thumbnailMetadata },
 
             videoFile:
                 videoUpload.secure_url,
@@ -196,6 +212,9 @@ const publishAVideo = asyncHandler(async (req, res) => {
             thumbnailPublicId:
                 thumbnailUpload.public_id,
 
+            videoDeliveryType: videoUpload.type || null,
+            thumbnailDeliveryType: thumbnailUpload.type || null,
+
             title:
                 trimmedTitle,
 
@@ -206,7 +225,10 @@ const publishAVideo = asyncHandler(async (req, res) => {
 
             owner:
                 userId
-        });
+                }], { session });
+            });
+            committed = true;
+        } finally { await session.endSession(); }
 
         //==================================================//
         // 🔔 NOTIFICATION HOOK
@@ -255,7 +277,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
                     }
                 }));
 
-            await Notification.insertMany(
+            await createThumbnailNotifications(
                 notifications
             );
         }
@@ -263,8 +285,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
         //==================================================//
 
         // Database me video successfully save ho gaya
-        uploadedVideoPublicId = null;
-        uploadedThumbnailPublicId = null;
+        createdVideo = await Video.findById(newVideoId);
 
         //================ SUCCESS RESPONSE =================//
 
@@ -282,41 +303,14 @@ const publishAVideo = asyncHandler(async (req, res) => {
 
         //================ CLEANUP VIDEO =================//
 
-        if (uploadedVideoPublicId) {
-
-            try {
-
-                await deleteFromCloudinary(
-                    uploadedVideoPublicId,
-                    "video"
-                );
-
-            } catch (error) {
-
-                console.error(
-                    "Failed to cleanup uploaded video:",
-                    error
-                );
-            }
-        }
-
-        //================ CLEANUP THUMBNAIL =================//
-
-        if (uploadedThumbnailPublicId) {
-
-            try {
-
-                await deleteFromCloudinary(
-                    uploadedThumbnailPublicId,
-                    "image"
-                );
-
-            } catch (error) {
-
-                console.error(
-                    "Failed to cleanup uploaded thumbnail:",
-                    error
-                );
+        if (!committed && uploadOwner) {
+            for (const [kind, upload] of [["video", uploadedVideo], ["thumbnail", uploadedThumbnail]]) {
+                if (!upload) continue;
+                let metadata;
+                try { metadata = videoUploadIdentity(upload, kind === "video" ? "video" : "image"); }
+                catch { metadata = { publicId: upload.public_id, url: upload.secure_url, resourceType: upload.resource_type, deliveryType: upload.type }; }
+                try { await queueVideoMedia({ metadata, kind, videoId: newVideoId, owner: uploadOwner, suffix: "failed-upload" }); }
+                catch (error) { console.error("Failed to queue uploaded media for review:", error); }
             }
         }
 
@@ -392,41 +386,28 @@ const publishAVideo = asyncHandler(async (req, res) => {
 //================== getAllVideos =============================//
 
 const getAllVideos = asyncHandler(async (req, res) => {
+    // 1. Get query parameters
+    const getQueryValue = (value) =>
+        Array.isArray(value) ? value[0] : value;
 
-    const rawPage = Array.isArray(req.query.page)
-        ? req.query.page[0]
-        : req.query.page;
+    const rawPage = getQueryValue(req.query.page);
+    const rawLimit = getQueryValue(req.query.limit);
+    const rawSearch = getQueryValue(req.query.search);
+    const rawSortBy = getQueryValue(req.query.sortBy);
+    const rawSortType = getQueryValue(req.query.sortType);
 
-    const rawLimit = Array.isArray(req.query.limit)
-        ? req.query.limit[0]
-        : req.query.limit;
-
-    const rawSearch = Array.isArray(req.query.search)
-        ? req.query.search[0]
-        : req.query.search;
-
-    const rawSortBy = Array.isArray(req.query.sortBy)
-        ? req.query.sortBy[0]
-        : req.query.sortBy;
-
-    const rawSortType = Array.isArray(req.query.sortType)
-        ? req.query.sortType[0]
-        : req.query.sortType;
-
+    // 2. Login required
     const userId = req.user?._id;
 
     if (!userId) {
-        throw new ApiError(
-            401,
-            "Unauthorized request"
-        );
+        throw new ApiError(401, "Unauthorized request");
     }
 
+    // 3. Validate pagination
     let pageNumber = 1;
     let limitNumber = 10;
 
     if (rawPage !== undefined) {
-
         if (
             typeof rawPage !== "string" ||
             !/^[1-9]\d*$/.test(rawPage)
@@ -440,15 +421,11 @@ const getAllVideos = asyncHandler(async (req, res) => {
         pageNumber = Number(rawPage);
 
         if (!Number.isSafeInteger(pageNumber)) {
-            throw new ApiError(
-                400,
-                "Page value is too large"
-            );
+            throw new ApiError(400, "Page value is too large");
         }
     }
 
     if (rawLimit !== undefined) {
-
         if (
             typeof rawLimit !== "string" ||
             !/^[1-9]\d*$/.test(rawLimit)
@@ -462,17 +439,20 @@ const getAllVideos = asyncHandler(async (req, res) => {
         limitNumber = Number(rawLimit);
 
         if (!Number.isSafeInteger(limitNumber)) {
-            throw new ApiError(
-                400,
-                "Limit value is too large"
-            );
+            throw new ApiError(400, "Limit value is too large");
         }
 
-        if (limitNumber > 50) {
-            limitNumber = 50;
-        }
+        // Maximum 50 videos per request
+        limitNumber = Math.min(limitNumber, 50);
     }
 
+    const skip = (pageNumber - 1) * limitNumber;
+
+    if (!Number.isSafeInteger(skip)) {
+        throw new ApiError(400, "Page value is too large");
+    }
+
+    // 4. Validate sorting
     const allowedSortFields = [
         "createdAt",
         "views",
@@ -480,9 +460,11 @@ const getAllVideos = asyncHandler(async (req, res) => {
         "duration"
     ];
 
-    const sortBy = allowedSortFields.includes(rawSortBy)
-        ? rawSortBy
-        : "createdAt";
+    const sortBy =
+        typeof rawSortBy === "string" &&
+        allowedSortFields.includes(rawSortBy)
+            ? rawSortBy
+            : "createdAt";
 
     if (
         rawSortType !== undefined &&
@@ -495,19 +477,13 @@ const getAllVideos = asyncHandler(async (req, res) => {
         );
     }
 
-    const sortOrder =
-        rawSortType === "asc"
-            ? 1
-            : -1;
+    const sortOrder = rawSortType === "asc" ? 1 : -1;
 
+    // 5. Find users blocked by this user or blocking this user
     const blockedUsers = await BlockedUser.find({
         $or: [
-            {
-                blocker: userId
-            },
-            {
-                blockedUser: userId
-            }
+            { blocker: userId },
+            { blockedUser: userId }
         ]
     })
         .select("blocker blockedUser")
@@ -519,21 +495,23 @@ const getAllVideos = asyncHandler(async (req, res) => {
             : block.blocker
     );
 
+    // 6. Match all published videos
     const matchStage = {
         isPublished: true
     };
 
+    // Exclude videos belonging to blocked users
     if (blockedUserIds.length > 0) {
         matchStage.owner = {
             $nin: blockedUserIds
         };
     }
 
+    // 7. Search by title or description
     if (
         typeof rawSearch === "string" &&
         rawSearch.trim()
     ) {
-
         const search = escapeRegex(
             rawSearch.trim().slice(0, 100)
         );
@@ -554,26 +532,23 @@ const getAllVideos = asyncHandler(async (req, res) => {
         ];
     }
 
-    const aggregate = Video.aggregate([
+    // 8. Common aggregation pipeline
+    // Videos from every account are included if published.
+    // Videos without an existing owner document are excluded.
+    const buildBasePipeline = () => [
         {
             $match: matchStage
-        },
-        {
-            $sort: {
-                [sortBy]: sortOrder,
-                _id: -1
-            }
         },
         {
             $lookup: {
                 from: "users",
                 localField: "owner",
                 foreignField: "_id",
-                as: "owner"
+                as: "ownerDetails"
             }
         },
         {
-            $unwind: "$owner"
+            $unwind: "$ownerDetails"
         },
         {
             $project: {
@@ -586,42 +561,88 @@ const getAllVideos = asyncHandler(async (req, res) => {
                 isPublished: 1,
                 createdAt: 1,
                 owner: {
-                    _id: "$owner._id",
-                    username: "$owner.username",
-                    fullName: "$owner.fullName",
-                    avatar: "$owner.avatar"
+                    _id: "$ownerDetails._id",
+                    username: "$ownerDetails.username",
+                    fullName: "$ownerDetails.fullName",
+                    avatar: "$ownerDetails.avatar"
                 }
             }
         }
+    ];
+
+    // 9. Fetch videos and count using the same base pipeline
+    const [docs, countResult] = await Promise.all([
+        Video.aggregate([
+            ...buildBasePipeline(),
+            {
+                $sort: {
+                    [sortBy]: sortOrder,
+                    _id: -1
+                }
+            },
+            {
+                $skip: skip
+            },
+            {
+                $limit: limitNumber
+            }
+        ]),
+
+        Video.aggregate([
+            ...buildBasePipeline(),
+            {
+                $count: "totalDocs"
+            }
+        ])
     ]);
 
-    const videos =
-        await Video.aggregatePaginate(
-            aggregate,
-            {
-                page: pageNumber,
-                limit: limitNumber
-            }
-        );
+    const totalDocs = countResult[0]?.totalDocs ?? 0;
+    const totalPages = Math.ceil(totalDocs / limitNumber);
 
-    return res
-        .status(200)
-        .json(
-            new ApiResponse(
-                200,
-                videos,
-                "Videos fetched successfully"
-            )
-        );
+    // 10. Build consistent pagination response
+    const videos = {
+        docs,
+        totalDocs,
+        limit: limitNumber,
+        page: pageNumber,
+        totalPages,
+        pagingCounter: totalDocs === 0 ? 0 : skip + 1,
+        hasPrevPage: pageNumber > 1 && totalPages > 0,
+        hasNextPage: pageNumber < totalPages,
+        prevPage:
+            pageNumber > 1 && totalPages > 0
+                ? pageNumber - 1
+                : null,
+        nextPage:
+            pageNumber < totalPages
+                ? pageNumber + 1
+                : null
+    };
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            videos,
+            "Videos fetched successfully"
+        )
+    );
 });
-
 
 //=================== getVideoById =============================//
 
 const getVideoById = asyncHandler(async (req, res) => {
-
     const { videoId } = req.params;
+    const userId = req.user?._id;
 
+    // Login required
+    if (!userId) {
+        throw new ApiError(
+            401,
+            "Unauthorized request"
+        );
+    }
+
+    // Validate video ID
     if (!videoId) {
         throw new ApiError(
             400,
@@ -636,6 +657,7 @@ const getVideoById = asyncHandler(async (req, res) => {
         );
     }
 
+    // Fetch any published video, regardless of its owner
     const video = await Video.findOne({
         _id: videoId,
         isPublished: true
@@ -650,14 +672,30 @@ const getVideoById = asyncHandler(async (req, res) => {
     if (!video) {
         throw new ApiError(
             404,
-            "Video not found"
+            "Published video not found"
         );
     }
 
-    const blocked = await isBlockedBetweenUsers(
-        req.user._id,
-        video.owner._id
-    );
+    if (!video.owner?._id) {
+        throw new ApiError(
+            404,
+            "Video owner not found"
+        );
+    }
+
+    // Check whether either user has blocked the other
+    const blocked = await BlockedUser.exists({
+        $or: [
+            {
+                blocker: userId,
+                blockedUser: video.owner._id
+            },
+            {
+                blocker: video.owner._id,
+                blockedUser: userId
+            }
+        ]
+    });
 
     if (blocked) {
         throw new ApiError(
@@ -666,15 +704,13 @@ const getVideoById = asyncHandler(async (req, res) => {
         );
     }
 
-    return res
-        .status(200)
-        .json(
-            new ApiResponse(
-                200,
-                video,
-                "Video fetched successfully"
-            )
-        );
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            video,
+            "Video fetched successfully"
+        )
+    );
 });
 
 
@@ -725,7 +761,7 @@ const updateVideo = asyncHandler(async (req, res) => {
         );
     }
 
-    const video = await Video.findById(videoId);
+    const video = await Video.findOne({ _id: videoId, isDeleted: { $ne: true } });
 
     if (!video) {
         throw new ApiError(
@@ -804,8 +840,8 @@ const updateVideo = asyncHandler(async (req, res) => {
 
     let newThumbnailUpload = null;
 
-    const oldThumbnailPublicId =
-        video.thumbnailPublicId;
+    let updatedVideo;
+    let thumbnailCommitted = false;
 
     try {
 
@@ -826,55 +862,58 @@ const updateVideo = asyncHandler(async (req, res) => {
                 );
             }
 
-            video.thumbnail =
-                newThumbnailUpload.secure_url;
-
-            video.thumbnailPublicId =
-                newThumbnailUpload.public_id;
         }
-
-        await video.save();
-
-        if (
-            thumbnail &&
-            oldThumbnailPublicId &&
-            oldThumbnailPublicId !==
-                newThumbnailUpload.public_id
-        ) {
-            try {
-                await deleteFromCloudinary(
-                    oldThumbnailPublicId,
-                    "image"
-                );
-            } catch (error) {
-                console.error(
-                    "Failed to delete old thumbnail:",
-                    error
-                );
-            }
-        }
+        const metadata = thumbnail ? videoUploadIdentity(newThumbnailUpload, "image") : null;
+        const session = await mongoose.startSession();
+        try {
+            await session.withTransaction(async () => {
+                const current = await Video.findOne({ _id: videoId, owner: userId, isDeleted: { $ne: true } })
+                    .select("+mediaRegistry +thumbnailDeliveryType").session(session);
+                if (!current) throw new ApiError(404, "Video not found or no longer accessible");
+                if (title !== undefined) current.title = video.title;
+                if (description !== undefined) current.description = video.description;
+                if (metadata) {
+                    const old = current.mediaRegistry?.thumbnail;
+                    await registerVideoMedia({ metadata, kind: "thumbnail", videoId: current._id, owner: userId, session });
+                    if (old?.asset !== metadata.asset) {
+                        await queueVideoMedia({ metadata: old || { url: current.thumbnail, publicId: current.thumbnailPublicId,
+                            resourceType: "image", deliveryType: current.thumbnailDeliveryType }, kind: "thumbnail", videoId: current._id, owner: userId, session });
+                        await unregisterVideoMedia({ metadata: old, kind: "thumbnail", videoId: current._id, owner: userId, session });
+                    }
+                    current.thumbnail = metadata.url;
+                    current.thumbnailPublicId = metadata.publicId;
+                    current.thumbnailDeliveryType = metadata.deliveryType;
+                    if (!current.mediaRegistry) current.mediaRegistry = {};
+                    current.mediaRegistry.thumbnail = metadata;
+                }
+                await current.save({ session });
+            });
+            thumbnailCommitted = true;
+        } finally { await session.endSession(); }
+        updatedVideo = await Video.findById(videoId);
 
         return res
             .status(200)
             .json(
                 new ApiResponse(
                     200,
-                    video,
+                    updatedVideo,
                     "Video updated successfully"
                 )
             );
 
     } catch (error) {
 
-        if (newThumbnailUpload?.public_id) {
+        if (newThumbnailUpload && !thumbnailCommitted) {
             try {
-                await deleteFromCloudinary(
-                    newThumbnailUpload.public_id,
-                    "image"
-                );
+                let metadata;
+                try { metadata = videoUploadIdentity(newThumbnailUpload, "image"); }
+                catch { metadata = { publicId: newThumbnailUpload.public_id, url: newThumbnailUpload.secure_url,
+                    resourceType: newThumbnailUpload.resource_type, deliveryType: newThumbnailUpload.type }; }
+                await queueVideoMedia({ metadata, kind: "thumbnail", videoId, owner: userId, suffix: "failed-upload" });
             } catch (cleanupError) {
                 console.error(
-                    "Failed to cleanup new thumbnail:",
+                    "Failed to queue new thumbnail for review:",
                     cleanupError
                 );
             }
@@ -929,7 +968,7 @@ const deleteVideo = asyncHandler(async (req, res) => {
         );
     }
 
-    const video = await Video.findById(videoId);
+    const video = await Video.findOne({ _id: videoId, isDeleted: { $ne: true } });
 
     if (!video) {
         throw new ApiError(
@@ -948,46 +987,14 @@ const deleteVideo = asyncHandler(async (req, res) => {
         );
     }
 
-    const deletedVideo =
-        await Video.findOneAndDelete({
-            _id: videoId,
-            owner: userId
+    const session = await mongoose.startSession();
+    try {
+        await session.withTransaction(async () => {
+            const current = await Video.findOne({ _id: videoId, owner: userId, isDeleted: { $ne: true } }).session(session);
+            if (!current) throw new ApiError(404, "Video not found or already deleted");
+            await tombstoneVideo(videoId, { session });
         });
-
-    if (!deletedVideo) {
-        throw new ApiError(
-            404,
-            "Video not found or already deleted"
-        );
-    }
-
-    if (deletedVideo.videoPublicId) {
-        try {
-            await deleteFromCloudinary(
-                deletedVideo.videoPublicId,
-                "video"
-            );
-        } catch (error) {
-            console.error(
-                "Failed to delete video from Cloudinary:",
-                error
-            );
-        }
-    }
-
-    if (deletedVideo.thumbnailPublicId) {
-        try {
-            await deleteFromCloudinary(
-                deletedVideo.thumbnailPublicId,
-                "image"
-            );
-        } catch (error) {
-            console.error(
-                "Failed to delete thumbnail from Cloudinary:",
-                error
-            );
-        }
-    }
+    } finally { await session.endSession(); }
 
     return res
         .status(200)
@@ -1004,80 +1011,44 @@ const deleteVideo = asyncHandler(async (req, res) => {
 //======================= incrementVideoViews =========================//
 
 const incrementVideoViews = asyncHandler(async (req, res) => {
-
     const { videoId } = req.params;
 
     if (!videoId) {
-        throw new ApiError(
-            400,
-            "Video ID is required"
-        );
+        throw new ApiError(400, "Video ID is required");
     }
 
     if (!isValidObjectId(videoId)) {
-        throw new ApiError(
-            400,
-            "Invalid video ID"
-        );
+        throw new ApiError(400, "Invalid video ID");
     }
 
-    const video = await Video.findOne({
-        _id: videoId,
-        isPublished: true
-    }).select("_id owner views");
-
-    if (!video) {
-        throw new ApiError(
-            404,
-            "Video not found"
-        );
-    }
-
-    const blocked = await isBlockedBetweenUsers(
-        req.user._id,
-        video.owner
-    );
-
-    if (blocked) {
-        throw new ApiError(
-            403,
-            "Video is not available"
-        );
-    }
-
+    // Atomically increment views for a published video.
     const updatedVideo = await Video.findOneAndUpdate(
         {
             _id: videoId,
-            isPublished: true
+            isPublished: true,
         },
         {
-            $inc: {
-                views: 1
-            }
+            $inc: { views: 1 },
         },
         {
-            new: true
+            new: true,
         }
-    );
+    ).select("_id views");
 
     if (!updatedVideo) {
-        throw new ApiError(
-            404,
-            "Video not found"
-        );
+        throw new ApiError(404, "Video not found");
     }
 
-    return res
-        .status(200)
-        .json(
-            new ApiResponse(
-                200,
-                {
-                    views: updatedVideo.views
-                },
-                "Video views incremented successfully"
-            )
-        );
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                videoId: updatedVideo._id,
+                views: updatedVideo.views,
+            },
+            "Video views incremented successfully"
+        )
+    );
 });
 
 
@@ -1112,7 +1083,8 @@ const togglePublishStatus = asyncHandler(async (req, res) => {
 
     const video = await Video.findOne({
         _id: videoId,
-        owner: userId
+        owner: userId,
+        isDeleted: { $ne: true }
     });
 
     if (!video) {
@@ -1129,7 +1101,8 @@ const togglePublishStatus = asyncHandler(async (req, res) => {
         {
             _id: videoId,
             owner: userId,
-            isPublished: oldStatus
+            isPublished: oldStatus,
+            isDeleted: { $ne: true }
         },
         {
             $set: {
@@ -1177,7 +1150,8 @@ const getMyVideos = asyncHandler(async (req, res) => {
     }
 
     const videos = await Video.find({
-        owner: userId
+        owner: userId,
+        isDeleted: { $ne: true }
     })
         .sort({
             createdAt: -1,
