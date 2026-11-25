@@ -717,73 +717,65 @@ const changeUsername = asyncHandler(async (req, res) => {
 const getPublicProfile = asyncHandler(async (req, res) => {
     const { userId } = req.params;
 
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-        throw new ApiError(
-            400,
-            "Invalid user ID"
-        );
-    }
+    const isObjectId = mongoose.Types.ObjectId.isValid(userId);
 
-    const user = await User.findById(userId).select(
-        "_id username fullName bio avatar coverImage isVerified createdAt"
-    );
+    const user = isObjectId
+        ? await User.findById(userId).select(
+              "_id username fullName bio avatar coverImage isVerified createdAt"
+          )
+        : await User.findOne({
+              username: userId.replace(/^@+/, "").toLowerCase(),
+          }).select(
+              "_id username fullName bio avatar coverImage isVerified createdAt"
+          );
 
     if (!user) {
-        throw new ApiError(
-            404,
-            "User not found"
-        );
+        throw new ApiError(404, "User not found");
     }
 
-    const page = Math.max(
-        Number(req.query.page) || 1,
-        1
-    );
+    const targetUserId = user._id;
+    const currentUserId = req.user._id;
 
-    const limit = Math.min(
-        Math.max(Number(req.query.limit) || 12, 1),
-        50
-    );
-
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 12, 1), 50);
     const skip = (page - 1) * limit;
 
-    const [followers, following, totalVideos, videos, isFollowing] =
-        await Promise.all([
-            Subscribe.countDocuments({
-                channel: userId
-            }),
+    const [
+        followers,
+        following,
+        totalVideos,
+        videos,
+        isFollowing,
+    ] = await Promise.all([
+        Subscribe.countDocuments({
+            channel: targetUserId,
+        }),
 
-            Subscribe.countDocuments({
-                subscriber: userId
-            }),
+        Subscribe.countDocuments({
+            subscriber: targetUserId,
+        }),
 
-            Video.countDocuments({
-                owner: userId,
-                isPublished: true
-            }),
+        Video.countDocuments({
+            owner: targetUserId,
+            isPublished: true,
+        }),
 
-            Video.find({
-                owner: userId,
-                isPublished: true
-            })
-                .select(
-                    "_id thumbnail title duration views createdAt"
-                )
-                .sort({
-                    createdAt: -1
-                })
-                .skip(skip)
-                .limit(limit),
+        Video.find({
+            owner: targetUserId,
+            isPublished: true,
+        })
+            .select("_id thumbnail title duration views createdAt")
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit),
 
-            Subscribe.exists({
-                subscriber: req.user._id,
-                channel: userId
-            })
-        ]);
+        Subscribe.exists({
+            subscriber: currentUserId,
+            channel: targetUserId,
+        }),
+    ]);
 
-    const totalPages = Math.ceil(
-        totalVideos / limit
-    );
+    const totalPages = Math.ceil(totalVideos / limit);
 
     return res.status(200).json(
         new ApiResponse(
@@ -793,11 +785,11 @@ const getPublicProfile = asyncHandler(async (req, res) => {
                 stats: {
                     videos: totalVideos,
                     followers,
-                    following
+                    following,
                 },
-                isFollowing: !!isFollowing,
+                isFollowing: Boolean(isFollowing),
                 isOwnProfile:
-                    req.user._id.toString() === userId,
+                    currentUserId.toString() === targetUserId.toString(),
                 videos,
                 pagination: {
                     currentPage: page,
@@ -805,8 +797,8 @@ const getPublicProfile = asyncHandler(async (req, res) => {
                     totalVideos,
                     totalPages,
                     hasNextPage: page < totalPages,
-                    hasPreviousPage: page > 1
-                }
+                    hasPreviousPage: page > 1,
+                },
             },
             "Public profile fetched successfully"
         )
