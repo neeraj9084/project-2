@@ -36,14 +36,14 @@ const loginUser = asyncHandler(async (req, res) => {
         throw new ApiError(401, "Invalid Credential");
     }
 
+    if (!user.isActive || user.deletionRequestedAt || user.anonymizedAt) {
+        throw new ApiError(403, "Your account is deactivated");
+    }
+
     const isPasswordCorrect = await user.isPasswordCorrect(password);
 
     if (!isPasswordCorrect) {
         throw new ApiError(401, "Invalid Credential");
-    }
-
-    if (!user.isActive) {
-        throw new ApiError(403, "Your account is deactivated");
     }
 
     if (!user.isVerified) {
@@ -56,11 +56,15 @@ const loginUser = asyncHandler(async (req, res) => {
     const accessToken = user.generateAccessToken();
     const refreshToken = user.generateRefreshToken();
 
-    user.refreshToken = refreshToken;
+    const sessionUser = await User.findOneAndUpdate(
+        { _id: user._id, isActive: true, deletionRequestedAt: null, anonymizedAt: null },
+        { $set: { refreshToken } },
+        { new: true }
+    );
 
-    await user.save({
-        validateBeforeSave: false
-    });
+    if (!sessionUser) {
+        throw new ApiError(403, "Account is deactivated");
+    }
 
     const loggedInUser = await User.findById(user._id).select(
         "-password -refreshToken"
@@ -144,7 +148,7 @@ const refreshAccessToken = asyncHandler(async(req, res) => {
             throw new ApiError(401, "Invalid refresh token")
         }
           
-        if (!user.isActive) {
+        if (!user.isActive || user.deletionRequestedAt || user.anonymizedAt) {
         throw new ApiError(403, "Account is deactivated");
        
        }
@@ -334,7 +338,7 @@ const forgotPassword = asyncHandler(async (req, res) => {
         email: email.toLowerCase()
     });
 
-    if (!user || !user.isVerified) {
+    if (!user || !user.isVerified || user.anonymizedAt) {
         return res.status(200).json(
             new ApiResponse(
                 200,
@@ -697,13 +701,25 @@ const deactivateAccount = asyncHandler(async(req, res) => {
 
 const deleteAccount = asyncHandler(async (req, res) => {
 
-    const user = await User.findById(req.user._id);
+    const user = await User.findOneAndUpdate(
+        { _id: req.user._id, isActive: true, deletionRequestedAt: null },
+        {
+            $set: { isActive: false, deletionRequestedAt: new Date() },
+            $unset: {
+                refreshToken: 1,
+                accountRecoveryOtp: 1,
+                accountRecoveryOtpExpiry: 1,
+                forgotPasswordOtp: 1,
+                forgotPasswordOtpExpiry: 1,
+                passwordResetToken: 1
+            }
+        },
+        { new: true }
+    );
 
     if (!user) {
-        throw new ApiError(404, "User not found");
+        throw new ApiError(403, "Account is unavailable");
     }
-
-    await User.findByIdAndDelete(req.user._id);
 
     return res
         .status(200)
@@ -719,7 +735,7 @@ const deleteAccount = asyncHandler(async (req, res) => {
             new ApiResponse(
                 200,
                 {},
-                "Account deleted successfully"
+                "Account deletion requested. Permanent deletion is pending."
             )
         );
 });
@@ -742,7 +758,7 @@ const accountRecovery = asyncHandler(async (req, res) => {
         email: normalizedEmail
     });
 
-    if (!user || user.isActive) {
+    if (!user || user.isActive || user.deletionRequestedAt || user.anonymizedAt) {
         return res.status(200).json(
             new ApiResponse(
                 200,
@@ -810,6 +826,10 @@ const verifyAccountRecovery = asyncHandler(async (req, res) => {
         );
     }
 
+    if (user.deletionRequestedAt || user.anonymizedAt) {
+        throw new ApiError(403, "Account recovery is unavailable");
+    }
+
     if (user.isActive) {
         throw new ApiError(
             400,
@@ -875,20 +895,25 @@ const verifyAccountRecovery = asyncHandler(async (req, res) => {
         );
     }
 
-    // Activate account
-    user.isActive = true;
+    const recoveredUser = await User.findOneAndUpdate(
+        {
+            _id: user._id,
+            isActive: false,
+            deletionRequestedAt: null,
+            anonymizedAt: null,
+            accountRecoveryOtp: otp,
+            accountRecoveryOtpExpiry: { $gt: new Date() }
+        },
+        {
+            $set: { isActive: true, accountRecoveryOtpAttempts: 0 },
+            $unset: { accountRecoveryOtp: 1, accountRecoveryOtpExpiry: 1, refreshToken: 1 }
+        },
+        { new: true }
+    );
 
-    // OTP cleanup
-    user.accountRecoveryOtp = undefined;
-    user.accountRecoveryOtpExpiry = undefined;
-    user.accountRecoveryOtpAttempts = 0;
-
-    // Old session remains invalid
-    user.refreshToken = undefined;
-
-    await user.save({
-        validateBeforeSave: false
-    });
+    if (!recoveredUser) {
+        throw new ApiError(403, "Account recovery is unavailable");
+    }
 
     // 🔔 Account recovery notification
     try {

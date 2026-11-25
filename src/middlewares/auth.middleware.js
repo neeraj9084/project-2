@@ -27,7 +27,7 @@ const verifyJWT = asyncHandler(async (req, res, next) => {
             throw new ApiError(401, "Invalid Access Token");
         }
 
-        if (!user.isActive) {
+        if (!user.isActive || user.deletionRequestedAt || user.anonymizedAt) {
             throw new ApiError(403, "Account is deactivated");
         }
 
