@@ -1,11 +1,38 @@
 import mongoose from "mongoose";
+import { retireMessageAttachment } from "../services/messageAttachmentRegistry.service.js";
+import { retireGroupAvatar } from "../services/groupAvatarRegistry.service.js";
 import { Conversation } from "../models/conversation.model.js";
 import { User } from "../models/user.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { Message } from "../models/message.model.js";
+import { ConversationMember } from "../models/conversationMember.model.js";
+import { MessageReaction } from "../models/messageReaction.model.js";
+import { Share } from "../models/share.model.js";
 import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
+
+const hideClearedPreview = (conversation, clearedAt) => {
+    const result = conversation.toObject();
+    if (clearedAt && result.lastMessageAt && result.lastMessageAt <= clearedAt) {
+        result.lastMessage = null;
+        result.lastMessageAt = null;
+    }
+    return result;
+};
+
+const getClearedAt = async (conversation, userId) => {
+    if (conversation.type === "group") {
+        const member = await ConversationMember.findOne({
+            conversation: conversation._id, user: userId, isActive: true
+        }).select("clearedAt");
+        if (!member) throw new ApiError(403, "You are not a member of this conversation");
+        return member.clearedAt;
+    }
+    return conversation.directReadStatus.find(
+        (status) => status.user.toString() === userId.toString()
+    )?.clearedAt;
+};
 
 //===================== createDirectConversation =========================//
 
@@ -83,10 +110,17 @@ const createDirectConversation = asyncHandler(async (req, res) => {
         });
 
     if (existingConversation) {
+        const status = existingConversation.directReadStatus.find(
+            (item) => item.user.toString() === currentUserId.toString()
+        );
+        if (status?.isHidden) {
+            status.isHidden = false;
+            await existingConversation.save();
+        }
         return res.status(200).json(
             new ApiResponse(
                 200,
-                existingConversation,
+                hideClearedPreview(existingConversation, await getClearedAt(existingConversation, currentUserId)),
                 "Direct conversation already exists"
             )
         );
@@ -128,10 +162,18 @@ const getUserConversation = asyncHandler(async(req, res) => {
 
    const skip = (page - 1) * limit;
 
-   const conversation = await Conversation.find({
+   const memberships = await ConversationMember.find({
+    user: userId, isActive: true, isHidden: { $ne: true }
+   }).select("conversation").lean();
+   const filter = {
     participants: userId,
-    isActive: true
-   })
+    isActive: true,
+    $or: [
+        { type: "direct", directReadStatus: { $not: { $elemMatch: { user: userId, isHidden: true } } } },
+        { type: "group", _id: { $in: memberships.map((member) => member.conversation) } }
+    ]
+   };
+   const conversation = await Conversation.find(filter)
    .populate(
     "participants",
     "username fullname avatar isActive"
@@ -146,16 +188,21 @@ const getUserConversation = asyncHandler(async(req, res) => {
    .skip(skip)
    .limit(limit)
 
-   const total = await Conversation.countDocuments({
-    participants: userId,
-    isActive: true
-   })
+   const total = await Conversation.countDocuments(filter)
 
     return res.status(200).json(
         new ApiResponse(
             200,
             {
-                conversation,
+                conversation: (await Promise.all(conversation.map(async (item) => {
+                    if (item.type === "group") {
+                        const member = await ConversationMember.findOne({
+                            conversation: item._id, user: userId, isActive: true
+                        }).select("clearedAt");
+                        return member ? hideClearedPreview(item, member.clearedAt) : null;
+                    }
+                    return hideClearedPreview(item, await getClearedAt(item, userId));
+                }))).filter(Boolean),
                 pagination: {
                     page,
                     limit,
@@ -226,7 +273,7 @@ const getConversationById = asyncHandler(async (req, res) => {
     return res.status(200).json(
         new ApiResponse(
             200,
-            conversation,
+            hideClearedPreview(conversation, await getClearedAt(conversation, userId)),
             "Conversation fetched successfully"
         )
     );
@@ -297,7 +344,7 @@ if (blocked) {
     return res.status(200).json(
         new ApiResponse(
             200,        
-            conversation,
+            hideClearedPreview(conversation, await getClearedAt(conversation, currentUserId)),
             "Direct conversation fetched successfully"
         )
     );
@@ -329,19 +376,73 @@ const deleteConversation = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Conversation not found");
     }
 
-    const participant = conversation.participants.find(
-        (participantId) => participantId.toString() === currentUserId.toString()            
-    );
+    let responseMessage = "Conversation hidden successfully";
+    if (conversation.type === "direct") {
+        const now = new Date();
+        const status = conversation.directReadStatus.find(
+            (item) => item.user.toString() === currentUserId.toString()
+        );
+        if (status) {
+            status.isHidden = true;
+            status.clearedAt = now;
+            status.lastReadAt = now;
+        } else {
+            conversation.directReadStatus.push({
+                user: currentUserId, isHidden: true, clearedAt: now, lastReadAt: now
+            });
+        }
+        await conversation.save();
+    } else if (conversation.type === "group") {
+        const member = await ConversationMember.findOne({
+            conversation: conversationId, user: currentUserId, isActive: true
+        });
+        if (!member) {
+            throw new ApiError(403, "You are not an active member of this conversation");
+        }
 
-    if(!participant){
-        throw new ApiError(403, "You are not a member of this conversation");
+        if (!conversation.createdBy.equals(currentUserId)) {
+            member.isHidden = true;
+            await member.save();
+        } else {
+            const session = await mongoose.startSession();
+            try {
+                await session.withTransaction(async () => {
+                    const activeMember = await ConversationMember.exists({
+                        conversation: conversationId, user: currentUserId, isActive: true
+                    }).session(session);
+                    if (!activeMember) {
+                        throw new ApiError(403, "You are not an active member of this conversation");
+                    }
+                    const deleted = await Conversation.findOneAndDelete({
+                        _id: conversationId, type: "group", createdBy: currentUserId,
+                        participants: currentUserId, isActive: true
+                    }).select("+mediaRegistry").session(session);
+                    if (!deleted) throw new ApiError(404, "Conversation not found");
+
+                    await retireGroupAvatar(deleted, { session });
+
+                    const messages = await Message.find({ conversation: conversationId })
+                        .select("_id sender attachment +attachment.mediaRegistry").session(session).lean();
+                    for (const message of messages) await retireMessageAttachment(message, { session });
+                    const messageIds = messages.map((message) => message._id);
+                    await MessageReaction.deleteMany({ message: { $in: messageIds } }, { session });
+                    await Message.updateMany({ forwardedFrom: { $in: messageIds } },
+                        { $set: { forwardedFrom: null } }, { session });
+                    await Message.updateMany({ replyTo: { $in: messageIds } },
+                        { $set: { replyTo: null } }, { session });
+                    await Message.deleteMany({ conversation: conversationId }, { session });
+                    await ConversationMember.deleteMany({ conversation: conversationId }, { session });
+                    await Share.updateMany({ conversation: conversationId },
+                        { $set: { conversation: null } }, { session });
+                });
+                responseMessage = "Conversation deleted successfully";
+            } finally {
+                await session.endSession();
+            }
+        }
+    } else {
+        throw new ApiError(400, "Invalid conversation type");
     }
-
-    await Message.deleteMany({
-        conversation: conversationId
-    });
-
-    await Conversation.findByIdAndDelete(conversationId)
 
     return res
      .status(200)
@@ -349,7 +450,7 @@ const deleteConversation = asyncHandler(async (req, res) => {
         new  ApiResponse(
             200,
             {},
-            "Conversation deleted successfully"   
+            responseMessage
         )
      )
 

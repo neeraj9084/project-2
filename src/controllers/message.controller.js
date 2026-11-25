@@ -9,6 +9,9 @@ import { Conversation } from "../models/conversation.model.js";
 import { ConversationMember } from "../models/conversationMember.model.js";
 import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 import { Notification } from "../models/notification.model.js";
+import { videoUploadIdentity, registerVideoMedia, queueVideoMedia } from "../services/videoAssetRegistry.service.js";
+import { verifiedAttachment, retireMessageAttachment } from "../services/messageAttachmentRegistry.service.js";
+import { registerAssetReference } from "../services/cloudinaryAssetReference.service.js";
 
 // ====================== sendMessage ====================== //
 
@@ -152,10 +155,13 @@ if (otherParticipant) {
     }
 
     let attachment = null;
+    let uploadedFile = null;
+    let metadata = null;
+    const newMessageId = new mongoose.Types.ObjectId();
 
     if (file) {
 
-        const uploadedFile =
+        uploadedFile =
             await uploadOnCloudinary(file.path);
 
         if (!uploadedFile) {
@@ -165,12 +171,25 @@ if (otherParticipant) {
             );
         }
 
+        try {
+            if (!["image", "video", "raw"].includes(uploadedFile.resource_type)) throw new Error("Invalid resource type");
+            metadata = videoUploadIdentity(uploadedFile, uploadedFile.resource_type);
+        } catch (error) {
+            try { await queueVideoMedia({ metadata: { url: uploadedFile.secure_url, publicId: uploadedFile.public_id,
+                resourceType: uploadedFile.resource_type, deliveryType: uploadedFile.type }, kind: "attachment",
+                videoId: newMessageId, owner: currentUserId, suffix: "failed-upload" }); }
+            catch (queueError) { console.error("Failed to queue attachment:", queueError); }
+            throw error;
+        }
         attachment = {
             url: uploadedFile.secure_url,
             publicId: uploadedFile.public_id,
+            resourceType: uploadedFile.resource_type || null,
+            deliveryType: uploadedFile.type || null,
             fileName: file.originalname,
             mimeType: file.mimetype,
-            size: file.size
+            size: file.size,
+            mediaRegistry: metadata
         };
     }
 
@@ -192,20 +211,27 @@ if (otherParticipant) {
             cleanClientMessageId;
     }
 
-    const message = await Message.create(
-        messageData
-    );
-
-    conversation.lastMessage =
-        message._id;
-
-    conversation.lastMessageAt =
-        message.createdAt;
-
-    await conversation.save();
+    let message;
+    const session = await mongoose.startSession();
+    try {
+        await session.withTransaction(async () => {
+            if (metadata) await registerVideoMedia({ metadata, kind: "attachment", videoId: newMessageId, owner: currentUserId, session });
+            [message] = await Message.create([{ ...messageData, _id: newMessageId }], { session });
+            const updated = await Conversation.updateOne({ _id: conversationId, isActive: true },
+                { $set: { lastMessage: message._id, lastMessageAt: message.createdAt } }, { session });
+            if (!updated.matchedCount) throw new ApiError(404, "Conversation not found");
+        });
+    } catch (error) {
+        if (metadata) try { await queueVideoMedia({ metadata, kind: "attachment", videoId: newMessageId,
+            owner: currentUserId, suffix: "failed-upload" }); }
+        catch (queueError) { console.error("Failed to queue attachment:", queueError); }
+        throw error;
+    } finally { await session.endSession(); }
+    message = await Message.findById(newMessageId);
   
 
 try {
+
     if (conversation.type === "direct") {
         const recipientId = conversation.participants.find(
             (participant) =>
@@ -320,6 +346,8 @@ const getMessages = asyncHandler(async (req, res) => {
         );
     }
 
+    let clearedAt = null;
+
     if (conversation.type === "direct") {
 
         const isParticipant =
@@ -357,6 +385,13 @@ const getMessages = asyncHandler(async (req, res) => {
             }
         }
 
+        const readStatus = conversation.directReadStatus.find(
+            (item) =>
+                item.user.toString() === currentUserId.toString()
+        );
+
+        clearedAt = readStatus?.clearedAt || null;
+
     } else if (conversation.type === "group") {
 
         const member =
@@ -372,6 +407,8 @@ const getMessages = asyncHandler(async (req, res) => {
                 "You are not a member of this conversation"
             );
         }
+
+        clearedAt = member.clearedAt || null;
 
     } else {
         throw new ApiError(
@@ -395,7 +432,10 @@ const getMessages = asyncHandler(async (req, res) => {
     const [messages, totalMessages] =
         await Promise.all([
             Message.find({
-                conversation: conversationId
+                conversation: conversationId,
+                ...(clearedAt && {
+                    createdAt: { $gt: clearedAt }
+                })
             })
                 .populate(
                     "sender",
@@ -409,7 +449,10 @@ const getMessages = asyncHandler(async (req, res) => {
                 .lean(),
 
             Message.countDocuments({
-                conversation: conversationId
+                conversation: conversationId,
+                ...(clearedAt && {
+                    createdAt: { $gt: clearedAt }
+                })
             })
         ]);
 
@@ -571,19 +614,16 @@ const deleteMessage = asyncHandler(async (req, res) => {
         );
     }
 
-    const message = await Message.findOne({
-        _id: messageId,
-        sender: currentUserId
-    });
-
-    if (!message) {
-        throw new ApiError(
-            404,
-            "Message not found or you are not the sender"
-        );
-    }
-
-    await Message.findByIdAndDelete(messageId);
+    const session = await mongoose.startSession();
+    try {
+        await session.withTransaction(async () => {
+            const message = await Message.findOne({ _id: messageId, sender: currentUserId })
+                .select("+attachment.mediaRegistry").session(session).lean();
+            if (!message) throw new ApiError(404, "Message not found or you are not the sender");
+            await retireMessageAttachment(message, { session });
+            await Message.deleteOne({ _id: messageId, sender: currentUserId }, { session });
+        });
+    } finally { await session.endSession(); }
 
     return res.status(200).json(
         new ApiResponse(
@@ -757,11 +797,11 @@ const getUnreadMessageCount = asyncHandler(async (req, res) => {
             );
 
         if (readStatus) {
-            lastReadAt = readStatus.lastReadAt;
+            lastReadAt = [readStatus.lastReadAt, readStatus.clearedAt]
+                .filter(Boolean).sort((a, b) => b - a)[0] || null;
         }
-    }
 
-    const otherParticipant =
+        const otherParticipant =
     conversation.participants.find(
         (participant) =>
             participant.toString() !==
@@ -780,15 +820,14 @@ if (otherParticipant) {
             "Conversation is not available"
         );
     }
-}
-
-    else if (conversation.type === "group") {
+        }
+    } else if (conversation.type === "group") {
         const member =
             await ConversationMember.findOne({
                 conversation: conversationId,
                 user: currentUserId,
                 isActive: true
-            }).select("lastReadAt");
+            }).select("lastReadAt clearedAt");
 
         if (!member) {
             throw new ApiError(
@@ -797,7 +836,8 @@ if (otherParticipant) {
             );
         }
 
-        lastReadAt = member.lastReadAt;
+        lastReadAt = [member.lastReadAt, member.clearedAt]
+            .filter(Boolean).sort((a, b) => b - a)[0] || null;
     }
 
     else {
@@ -895,6 +935,8 @@ const searchMessages = asyncHandler(async (req, res) => {
         );
     }
 
+    let clearedAt = null;
+
     if (conversation.type === "direct") {
         const isParticipant =
             conversation.participants.some(
@@ -930,6 +972,13 @@ if (otherParticipant) {
     }
 }
 
+        const readStatus = conversation.directReadStatus.find(
+            (item) =>
+                item.user.toString() === currentUserId.toString()
+        );
+
+        clearedAt = readStatus?.clearedAt || null;
+
     } else if (conversation.type === "group") {
         const member =
             await ConversationMember.findOne({
@@ -944,6 +993,8 @@ if (otherParticipant) {
                 "You are not a member of this conversation"
             );
         }
+
+        clearedAt = member.clearedAt || null;
     } else {
         throw new ApiError(
             400,
@@ -972,6 +1023,10 @@ if (otherParticipant) {
             $options: "i"
         }
     };
+
+    if (clearedAt) {
+        searchFilter.createdAt = { $gt: clearedAt };
+    }
 
     const [
         messages,
@@ -1270,6 +1325,57 @@ const forwardMessage = asyncHandler(async (req, res) => {
         );
     }
 
+    const sourceConversation = await Conversation.findOne({
+        _id: sourceMessage.conversation,
+        isActive: true
+    });
+
+    if (!sourceConversation) {
+        throw new ApiError(404, "Message not found");
+    }
+
+    let clearedAt;
+
+    if (sourceConversation.type === "direct") {
+        const isParticipant = sourceConversation.participants.some(
+            (participant) => participant.toString() === currentUserId.toString()
+        );
+
+        if (!isParticipant) {
+            throw new ApiError(403, "You are not a participant of this conversation");
+        }
+
+        const otherParticipant = sourceConversation.participants.find(
+            (participant) => participant.toString() !== currentUserId.toString()
+        );
+
+        if (otherParticipant && await isBlockedBetweenUsers(currentUserId, otherParticipant)) {
+            throw new ApiError(403, "Conversation is not available");
+        }
+
+        clearedAt = sourceConversation.directReadStatus.find(
+            (status) => status.user.toString() === currentUserId.toString()
+        )?.clearedAt;
+    } else if (sourceConversation.type === "group") {
+        const member = await ConversationMember.findOne({
+            conversation: sourceConversation._id,
+            user: currentUserId,
+            isActive: true
+        }).select("clearedAt");
+
+        if (!member) {
+            throw new ApiError(403, "You are not a member of this conversation");
+        }
+
+        clearedAt = member.clearedAt;
+    } else {
+        throw new ApiError(403, "Conversation is not available");
+    }
+
+    if (clearedAt && sourceMessage.createdAt <= clearedAt) {
+        throw new ApiError(404, "Message not found");
+    }
+
     const conversation = await Conversation.findOne({
         _id: conversationId,
         isActive: true
@@ -1354,6 +1460,8 @@ const forwardMessage = asyncHandler(async (req, res) => {
         messageData.attachment = {
             url: sourceMessage.attachment.url,
             publicId: sourceMessage.attachment.publicId,
+            resourceType: sourceMessage.attachment.resourceType,
+            deliveryType: sourceMessage.attachment.deliveryType,
             fileName: sourceMessage.attachment.fileName,
             mimeType: sourceMessage.attachment.mimeType,
             size: sourceMessage.attachment.size
@@ -1370,16 +1478,29 @@ const forwardMessage = asyncHandler(async (req, res) => {
             cleanClientMessageId;
     }
 
-    const forwardedMessage =
-        await Message.create(messageData);
-
-    conversation.lastMessage =
-        forwardedMessage._id;
-
-    conversation.lastMessageAt =
-        forwardedMessage.createdAt;
-
-    await conversation.save();
+    let forwardedMessage;
+    const forwardedId = new mongoose.Types.ObjectId();
+    const session = await mongoose.startSession();
+    try {
+        await session.withTransaction(async () => {
+            const currentSource = await Message.findOne({ _id: sourceMessage._id, isDeleted: false })
+                .select("+attachment.mediaRegistry").session(session).lean();
+            if (!currentSource || String(currentSource.conversation) !== String(sourceMessage.conversation) ||
+                (clearedAt && currentSource.createdAt <= clearedAt)) throw new ApiError(404, "Message not found");
+            if (currentSource.attachment) {
+                const metadata = verifiedAttachment(currentSource.attachment);
+                if (!metadata) throw new ApiError(409, "Attachment identity requires verification before forwarding");
+                await registerAssetReference({ assetId: metadata.asset, sourceType: "attachment", sourceId: forwardedId,
+                    userId: currentUserId, session });
+                messageData.attachment = { ...currentSource.attachment, mediaRegistry: metadata };
+            } else if (sourceMessage.attachment) throw new ApiError(404, "Message not found");
+            [forwardedMessage] = await Message.create([{ ...messageData, _id: forwardedId }], { session });
+            const updated = await Conversation.updateOne({ _id: conversationId, isActive: true },
+                { $set: { lastMessage: forwardedId, lastMessageAt: forwardedMessage.createdAt } }, { session });
+            if (!updated.matchedCount) throw new ApiError(404, "Conversation not found");
+        });
+    } finally { await session.endSession(); }
+    forwardedMessage = await Message.findById(forwardedId);
 
     await forwardedMessage.populate([
         {
@@ -1437,6 +1558,8 @@ const clearChat = asyncHandler(async (req, res) => {
         );
     }
 
+    const clearedAt = new Date();
+
     if (conversation.type === "direct") {
         const isParticipant =
             conversation.participants.some(
@@ -1451,6 +1574,24 @@ const clearChat = asyncHandler(async (req, res) => {
                 "You are not a participant of this conversation"
             );
         }
+
+        const readStatus = conversation.directReadStatus.find(
+            (item) =>
+                item.user.toString() === currentUserId.toString()
+        );
+
+        if (readStatus) {
+            readStatus.lastReadAt = clearedAt;
+            readStatus.clearedAt = clearedAt;
+        } else {
+            conversation.directReadStatus.push({
+                user: currentUserId,
+                lastReadAt: clearedAt,
+                clearedAt
+            });
+        }
+
+        await conversation.save();
     } else if (conversation.type === "group") {
         const member =
             await ConversationMember.findOne({
@@ -1465,6 +1606,11 @@ const clearChat = asyncHandler(async (req, res) => {
                 "You are not a member of this conversation"
             );
         }
+
+        member.lastReadAt = clearedAt;
+        member.clearedAt = clearedAt;
+
+        await member.save();
     } else {
         throw new ApiError(
             400,
@@ -1472,23 +1618,14 @@ const clearChat = asyncHandler(async (req, res) => {
         );
     }
 
-    const result = await Message.deleteMany({
-        conversation: conversationId
-    });
-
-    conversation.lastMessage = null;
-    conversation.lastMessageAt = null;
-
-    await conversation.save();
-
     return res.status(200).json(
         new ApiResponse(
             200,
             {
                 conversationId,
-                deletedMessages: result.deletedCount
+                clearedAt
             },
-            "Chat cleared successfully"
+            "Chat cleared for you successfully"
         )
     );
 });

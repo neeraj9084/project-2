@@ -15,6 +15,7 @@ import { User } from "../models/user.model.js";
 import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
 import { Notification } from "../models/notification.model.js";
+import { registerGroupAvatar } from "../services/groupAvatarRegistry.service.js";
 
 //===================== createMemberConversation =======================//
 
@@ -87,13 +88,22 @@ const createMemberConversation = asyncHandler(async (req, res) => {
         }
     }
 
-    const conversation = await Conversation.create({
+    let conversation;
+    const conversationId = new mongoose.Types.ObjectId();
+    const session = await mongoose.startSession();
+    try {
+        await session.withTransaction(async () => {
+    const avatarUrl = avatar?.trim() || null;
+    const avatarMetadata = await registerGroupAvatar({ url: avatarUrl, conversationId, userId: currentUserId, session });
+    [conversation] = await Conversation.create([{
+        _id: conversationId,
         participants: uniqueParticipantIds,
         type: "group",
         name: name.trim(),
-        avatar: avatar?.trim() || null,
+        avatar: avatarUrl,
+        mediaRegistry: avatarMetadata ? { avatar: avatarMetadata } : undefined,
         createdBy: currentUserId
-    });
+    }], { session });
 
     const members = uniqueParticipantIds.map((participantId) => ({
         conversation: conversation._id,
@@ -104,12 +114,16 @@ const createMemberConversation = asyncHandler(async (req, res) => {
                 : "member"
     }));
 
-    await ConversationMember.insertMany(members);
+    await ConversationMember.insertMany(members, { session });
+        });
+    } finally { await session.endSession(); }
 
+    const responseConversation = conversation.toObject();
+    delete responseConversation.mediaRegistry;
     return res.status(201).json(
         new ApiResponse(
             201,
-            conversation,
+            responseConversation,
             "Group conversation created successfully"
         )
     );

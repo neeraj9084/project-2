@@ -2,11 +2,72 @@ import mongoose from "mongoose";
 
 import { MessageReaction } from "../models/messageReaction.model.js";
 import { Message } from "../models/message.model.js";
+import { Conversation } from "../models/conversation.model.js";
+import { ConversationMember } from "../models/conversationMember.model.js";
 import { Notification } from "../models/notification.model.js";
+import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+
+const getVisibleMessage = async (messageId, userId) => {
+    const message = await Message.findOne({
+        _id: messageId,
+        isDeleted: false
+    }).select("_id sender conversation createdAt").lean();
+
+    if (!message) {
+        throw new ApiError(404, "Message not found");
+    }
+
+    const conversation = await Conversation.findOne({
+        _id: message.conversation,
+        isActive: true
+    }).select("type participants directReadStatus").lean();
+
+    if (!conversation) {
+        throw new ApiError(404, "Message not found");
+    }
+
+    let clearedAt;
+
+    if (conversation.type === "direct") {
+        if (!conversation.participants.some((participant) => participant.equals(userId))) {
+            throw new ApiError(403, "You are not a participant of this conversation");
+        }
+
+        const otherParticipant = conversation.participants.find(
+            (participant) => !participant.equals(userId)
+        );
+        if (otherParticipant && await isBlockedBetweenUsers(userId, otherParticipant)) {
+            throw new ApiError(403, "Conversation is not available");
+        }
+
+        clearedAt = conversation.directReadStatus.find(
+            (status) => status.user.equals(userId)
+        )?.clearedAt;
+    } else if (conversation.type === "group") {
+        const member = await ConversationMember.findOne({
+            conversation: conversation._id,
+            user: userId,
+            isActive: true
+        }).select("clearedAt").lean();
+
+        if (!member) {
+            throw new ApiError(403, "You are not a member of this conversation");
+        }
+        clearedAt = member.clearedAt;
+    } else {
+        throw new ApiError(403, "Conversation is not available");
+    }
+
+    if (clearedAt && message.createdAt <= clearedAt) {
+        throw new ApiError(404, "Message not found");
+    }
+
+    return message;
+};
 
 //=============================== addReaction ===================================
 
@@ -33,13 +94,7 @@ const addReaction = asyncHandler(async (req, res) => {
     }
 
     // Find message
-    const message = await Message.findById(messageId)
-        .select("_id sender")
-        .lean();
-
-    if (!message) {
-        throw new ApiError(404, "Message not found");
-    }
+    const message = await getVisibleMessage(messageId, userId);
 
     // Add / Update reaction
     const messageReaction = await MessageReaction.findOneAndUpdate(
@@ -110,13 +165,7 @@ const removeReaction = asyncHandler(async (req, res) => {
     }
 
     // Check message exists
-    const message = await Message.findById(messageId)
-        .select("_id")
-        .lean();
-
-    if (!message) {
-        throw new ApiError(404, "Message not found");
-    }
+    await getVisibleMessage(messageId, userId);
 
     // Remove reaction
     const result = await MessageReaction.findOneAndDelete({
