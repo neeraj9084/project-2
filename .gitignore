@@ -120,3 +120,4 @@ dist
 # End of https://mrkandreev.name/snippets/gitignore-generator/#Node
 # Multer temporary uploads
 public/temp/
+videoapp-frontend/debug-files.txtv
