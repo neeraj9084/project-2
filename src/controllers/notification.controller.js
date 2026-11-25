@@ -5,6 +5,7 @@ import { Notification } from "../models/notification.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { removeNotificationThumbnails } from "../services/notificationThumbnailRegistry.service.js";
 
 //====================== getMyNotifications ============================//
 
@@ -403,17 +404,17 @@ const deleteNotification = asyncHandler(async (req, res) => {
         );
     }
 
-    const notification = await Notification.findOneAndDelete({
-        _id: notificationId,
-        recipient: userId,
-    });
-
-    if (!notification) {
-        throw new ApiError(
-            404,
-            "Notification not found"
-        );
-    }
+    let notification;
+    const session = await mongoose.startSession();
+    try {
+        await session.withTransaction(async () => {
+            notification = await Notification.findOne({ _id: notificationId, recipient: userId })
+                .select("+mediaRegistry").session(session).lean();
+            if (!notification) throw new ApiError(404, "Notification not found");
+            await removeNotificationThumbnails([notification], { session });
+            await Notification.deleteOne({ _id: notificationId, recipient: userId }, { session });
+        });
+    } finally { await session.endSession(); }
 
     return res.status(200).json(
         new ApiResponse(
@@ -435,15 +436,22 @@ const clearAllNotifications = asyncHandler(async (req, res) => {
         throw new ApiError(401, "Unauthorized request");
     }
 
-    const result = await Notification.deleteMany({
-        recipient: userId,
-    });
+    let deletedCount = 0;
+    const session = await mongoose.startSession();
+    try {
+        await session.withTransaction(async () => {
+            const notifications = await Notification.find({ recipient: userId }).select("+mediaRegistry").session(session).lean();
+            await removeNotificationThumbnails(notifications, { session });
+            const result = await Notification.deleteMany({ _id: { $in: notifications.map((item) => item._id) }, recipient: userId }, { session });
+            deletedCount = result.deletedCount;
+        });
+    } finally { await session.endSession(); }
 
     return res.status(200).json(
         new ApiResponse(
             200,
             {
-                deletedCount: result.deletedCount,
+                deletedCount,
             },
             "All notifications cleared successfully"
         )

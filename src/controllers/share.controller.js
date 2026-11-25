@@ -11,6 +11,9 @@ import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 import { Message } from "../models/message.model.js";
 import { Conversation } from "../models/conversation.model.js";
 import { ConversationMember } from "../models/conversationMember.model.js";
+import { verifiedAttachment } from "../services/messageAttachmentRegistry.service.js";
+import { registerAssetReference } from "../services/cloudinaryAssetReference.service.js";
+import { createThumbnailNotifications } from "../services/notificationThumbnailRegistry.service.js";
 
 //====================== shareVideo ========================//
 
@@ -113,7 +116,7 @@ const shareVideo = asyncHandler(async (req, res) => {
             req.user._id.toString()
     ) {
         try {
-            await Notification.create({
+            await createThumbnailNotifications({
                 recipient: video.owner,
                 actor: req.user._id,
                 type: "system",
@@ -315,36 +318,31 @@ const shareVideoToChat = asyncHandler(async (req, res) => {
         );
     }
 
-    const message = await Message.create({
-        conversation: conversation._id,
-        sender: req.user._id,
-        type: "video",
-        content: content.trim(),
-        attachment: {
-            url: video.videoFile,
-            publicId: video.videoPublicId,
-            fileName: video.title,
-            mimeType: "video/mp4",
-            size: null
-        }
-    });
-
-    const share = await Share.create({
-        owner: req.user._id,
-        video: video._id,
-        shareType: "chat",
-        conversation: conversation._id
-    });
-
-    await Conversation.findByIdAndUpdate(
-        conversation._id,
-        {
-            $set: {
-                lastMessage: message._id,
-                lastMessageAt: new Date()
-            }
-        }
-    );
+    let message, share;
+    const messageId = new mongoose.Types.ObjectId();
+    const session = await mongoose.startSession();
+    try {
+        await session.withTransaction(async () => {
+            const current = await Video.findOne({ _id: videoId, isPublished: true, isDeleted: { $ne: true } })
+                .select("videoFile videoPublicId title +videoDeliveryType +mediaRegistry").session(session).lean();
+            if (!current) throw new ApiError(404, "Video not found");
+            const metadata = current.mediaRegistry?.video;
+            const attachment = { url: current.videoFile, publicId: current.videoPublicId,
+                resourceType: metadata?.resourceType, deliveryType: current.videoDeliveryType,
+                fileName: current.title, mimeType: "video/mp4", size: null, mediaRegistry: metadata };
+            if (!verifiedAttachment(attachment)) throw new ApiError(409, "Video identity requires verification before sharing");
+            await registerAssetReference({ assetId: metadata.asset, sourceType: "attachment", sourceId: messageId,
+                userId: req.user._id, session });
+            [message] = await Message.create([{ _id: messageId, conversation: conversation._id,
+                sender: req.user._id, type: "video", content: content.trim(), attachment }], { session });
+            [share] = await Share.create([{ owner: req.user._id, video: video._id, shareType: "chat",
+                conversation: conversation._id }], { session });
+            const updated = await Conversation.updateOne({ _id: conversation._id, isActive: true },
+                { $set: { lastMessage: message._id, lastMessageAt: message.createdAt } }, { session });
+            if (!updated.matchedCount) throw new ApiError(404, "Conversation not found");
+        });
+    } finally { await session.endSession(); }
+    message = await Message.findById(messageId);
 
     await message.populate([
         {
