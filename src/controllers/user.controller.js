@@ -10,6 +10,8 @@ import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import { Subscribe } from "../models/subscribe.model.js";
 import { Video } from "../models/video.model.js";
+import { videoUploadIdentity, registerVideoMedia, queueVideoMedia, unregisterVideoMedia } from "../services/videoAssetRegistry.service.js";
+import { verifiedAttachment } from "../services/messageAttachmentRegistry.service.js";
 //====================== startRegistration ======================//
 
 const startRegistration = asyncHandler(async (req, res) => {
@@ -511,6 +513,44 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
     );
 });
 
+// Replace profile media and its registry reference atomically.
+const replaceProfileMedia = async (userId, field, uploaded) => {
+    let metadata;
+    try {
+        metadata = videoUploadIdentity(uploaded, "image");
+        const session = await mongoose.startSession();
+        try {
+            await session.withTransaction(async () => {
+                const user = await User.findById(userId).select("+mediaRegistry +avatarPublicId +coverImagePublicId +avatarDeliveryType +coverImageDeliveryType").session(session);
+                if (!user) throw new ApiError(404, "User not found");
+                const previous = user.mediaRegistry?.[field];
+                await registerVideoMedia({ metadata, kind: field, videoId: userId, owner: userId, session });
+                if (previous?.asset !== metadata.asset && (user[field] || user[`${field}PublicId`])) {
+                    const old = verifiedAttachment({ url: user[field], publicId: user[`${field}PublicId`], resourceType: "image",
+                        deliveryType: user[`${field}DeliveryType`], mediaRegistry: previous })
+                        ? previous : { url: user[field], publicId: user[`${field}PublicId`], resourceType: "image",
+                            deliveryType: user[`${field}DeliveryType`] };
+                    await queueVideoMedia({ metadata: old, kind: field, videoId: userId, owner: userId, session });
+                    await unregisterVideoMedia({ metadata: old, kind: field, videoId: userId, owner: userId, session });
+                }
+                user[field] = metadata.url;
+                user[`${field}PublicId`] = metadata.publicId;
+                user[`${field}DeliveryType`] = metadata.deliveryType;
+                if (!user.mediaRegistry) user.mediaRegistry = {};
+                user.mediaRegistry[field] = metadata;
+                await user.save({ session, validateBeforeSave: false });
+            });
+        } finally { await session.endSession(); }
+    } catch (error) {
+        const failed = metadata || { url: uploaded.secure_url || uploaded.url, publicId: uploaded.public_id,
+            resourceType: uploaded.resource_type, deliveryType: uploaded.type };
+        try { await queueVideoMedia({ metadata: failed, kind: field, videoId: userId, owner: userId, suffix: "failed-upload" }); }
+        catch (queueError) { console.error("Failed to queue profile media:", queueError); }
+        throw error;
+    }
+    return User.findById(userId).select("-password -refreshToken");
+};
+
 //===================== updateAavatar =========================/
 
 const updateAvatar = asyncHandler(async(req, res) => {
@@ -526,24 +566,7 @@ const updateAvatar = asyncHandler(async(req, res) => {
         throw new ApiError(400, "Avatar upload failed")
     }
 
-    const user = await User.findById(req.user._id);
-
-    if (!user) {
-        throw new ApiError(
-            404,
-            "User not found"
-        );
-    }
-
-    user.avatar = avatar.url;
-
-    await user.save({
-        validateBeforeSave: false
-    });
-
-    const updatedUser = await User.findById(
-        user._id
-    ).select("-password -refreshToken");
+    const updatedUser = await replaceProfileMedia(req.user._id, "avatar", avatar);
 
     return res.status(200).json(
         new ApiResponse(
@@ -570,17 +593,7 @@ const updateCoverImage = asyncHandler(async(req, res) => {
         throw new ApiError(400, "Cover image upload failed")
     }
 
-    const user = await User.findById(req.user._id);
-    
-    if(!user){
-        throw new ApiError(404, " User not found")
-    }
-
-    user.coverImage = coverImage.url;
-
-    await user.save({validateBeforeSave: false})
-
-const updatedUser = await User.findById(user._id).select("-password -refreshToken")
+const updatedUser = await replaceProfileMedia(req.user._id, "coverImage", coverImage)
 
 return res.status(200).json(new ApiResponse(200, updatedUser,
     "Cover image updated successfully"))
