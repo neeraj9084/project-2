@@ -4,6 +4,8 @@ import { Report } from "../models/report.model.js";
 import { Video } from "../models/video.model.js";
 import { User } from "../models/user.model.js";
 import { Notification } from "../models/notification.model.js";
+import { createThumbnailNotifications } from "../services/notificationThumbnailRegistry.service.js";
+import { createVideoModerationHolds } from "../services/assetModerationHold.service.js";
 
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
@@ -28,7 +30,7 @@ const reportVideo = asyncHandler(async (req, res) => {
     }
 
     // Check video exists
-    const video = await Video.findById(videoId)
+    const video = await Video.findOne({ _id: videoId, isDeleted: { $ne: true } })
         .select("_id owner title thumbnail")
         .lean();
 
@@ -44,12 +46,16 @@ const reportVideo = asyncHandler(async (req, res) => {
     let report;
 
     try {
-        report = await Report.create({
+        const session = await mongoose.startSession();
+        try { await session.withTransaction(async () => {
+        [report] = await Report.create([{
             reporter: reporterId,
             video: videoId,
             reason,
             description,
-        });
+        }], { session });
+        await createVideoModerationHolds({ caseType: "report", caseId: report._id, videoId, actor: reporterId, session });
+        }); } finally { await session.endSession(); }
     } catch (error) {
 
         // Duplicate report
@@ -94,7 +100,7 @@ const reportVideo = asyncHandler(async (req, res) => {
                 }
             }));
 
-            await Notification.insertMany(notifications);
+            await createThumbnailNotifications(notifications);
         }
 
     } catch (error) {

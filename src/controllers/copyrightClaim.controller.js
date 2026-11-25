@@ -7,6 +7,7 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { Notification } from "../models/notification.model.js";
+import { createVideoModerationHolds } from "../services/assetModerationHold.service.js";
 
 //=========================== submitCopyrightClaim ===========================
 
@@ -57,7 +58,7 @@ const submitCopyrightClaim = asyncHandler(async (req, res) => {
         );
     }
 
-    const video = await Video.findById(videoId)
+    const video = await Video.findOne({ _id: videoId, isDeleted: { $ne: true } })
         .select("_id owner title")
         .lean();
 
@@ -92,12 +93,16 @@ const submitCopyrightClaim = asyncHandler(async (req, res) => {
     let claim;
 
     try {
-        claim = await CopyrightClaim.create({
+        const session = await mongoose.startSession();
+        try { await session.withTransaction(async () => {
+        [claim] = await CopyrightClaim.create([{
             claimant: claimantId,
             video: videoId,
             reason: trimmedReason,
             description: trimmedDescription,
-        });
+        }], { session });
+        await createVideoModerationHolds({ caseType: "copyright", caseId: claim._id, videoId, actor: claimantId, session });
+        }); } finally { await session.endSession(); }
     } catch (error) {
 
         if (error?.code === 11000) {
