@@ -422,7 +422,7 @@ const deleteConversation = asyncHandler(async (req, res) => {
                     await retireGroupAvatar(deleted, { session });
 
                     const messages = await Message.find({ conversation: conversationId })
-                        .select("_id sender attachment +attachment.mediaRegistry").session(session).lean();
+                        .select("_id sender attachment.url attachment.publicId attachment.resourceType attachment.deliveryType +attachment.mediaRegistry").session(session).lean();
                     for (const message of messages) await retireMessageAttachment(message, { session });
                     const messageIds = messages.map((message) => message._id);
                     await MessageReaction.deleteMany({ message: { $in: messageIds } }, { session });

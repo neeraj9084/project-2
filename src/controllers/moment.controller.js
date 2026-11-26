@@ -128,7 +128,7 @@ const createMoment = asyncHandler(async (req, res) => {
         );
 
         const media = await uploadOnCloudinary(
-            mediaLocalPath
+            mediaLocalPath, { user: req.user._id, sourceId: momentId, sourceType: "moment" }
         );
         uploadedMedia = media;
 

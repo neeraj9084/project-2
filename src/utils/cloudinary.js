@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import { v2 as cloudinary } from "cloudinary";
 import fs from "fs";
+import { performTrackedUpload } from "../services/mediaUploadIntent.service.js";
 
 
 dotenv.config({
@@ -14,15 +15,12 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-const uploadOnCloudinary = async (localFilePath) => {
+const uploadOnCloudinary = async (localFilePath, context) => {
     try {
         if (!localFilePath) return null;
 
-        const response = await cloudinary.uploader.upload(localFilePath, {
-            resource_type: "auto"
-        });
-
-        console.log("File is uploaded on Cloudinary", response.url);
+        const response = await performTrackedUpload({ ...context, cloudName: cloudinary.config().cloud_name,
+            upload: (publicId) => cloudinary.uploader.upload(localFilePath, { resource_type: "auto", public_id: publicId, overwrite: false }) });
 
        
         if (fs.existsSync(localFilePath)) {

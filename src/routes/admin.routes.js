@@ -2,6 +2,7 @@ import { Router } from "express";
 
 import { verifyJWT } from "../middlewares/auth.middleware.js";
 import { verifyAdmin } from "../middlewares/admin.middleware.js";
+import { approveRetention, releaseHolds } from "../controllers/moderationRetention.controller.js";
 
 import {
     getAdminOverview,
@@ -33,6 +34,9 @@ const router = Router();
 
 router.use(verifyJWT);
 router.use(verifyAdmin);
+
+router.post("/moderation/:caseType/:caseId/retention-approval", approveRetention);
+router.post("/moderation/:caseType/:caseId/hold-release", releaseHolds);
 
 router.get("/dashboard", getAdminOverview);
 

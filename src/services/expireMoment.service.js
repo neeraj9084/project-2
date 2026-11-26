@@ -4,9 +4,11 @@ import { MomentView } from "../models/momentView.model.js";
 import { MediaCleanupRecord } from "../models/mediaCleanupRecord.model.js";
 import { removeAssetReference } from "./cloudinaryAssetReference.service.js";
 import { verifiedAttachment } from "./messageAttachmentRegistry.service.js";
+import { fenceMediaCoverage } from "./mediaCoverageBarrier.service.js";
 
 const recordMomentMedia = async (moment, { session } = {}) => {
     if (!session?.inTransaction()) throw new Error("An active MongoDB transaction is required");
+    await fenceMediaCoverage({ session });
     const publicId = typeof moment.mediaPublicId === "string" && moment.mediaPublicId.trim()
         ? moment.mediaPublicId : null;
     const deliveryType = typeof moment.mediaDeliveryType === "string" && moment.mediaDeliveryType.trim()

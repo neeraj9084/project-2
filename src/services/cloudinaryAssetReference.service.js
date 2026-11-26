@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { CloudinaryAsset } from "../models/cloudinaryAsset.model.js";
 import { CloudinaryAssetReference } from "../models/cloudinaryAssetReference.model.js";
 import { AssetModerationHold } from "../models/assetModerationHold.model.js";
+import { fenceMediaCoverage, requireCompleteMediaCoverage } from "./mediaCoverageBarrier.service.js";
 
 // This must remain false until migration and every reference-writing API are covered.
 const REFERENCE_COVERAGE_COMPLETE = false;
@@ -24,10 +25,11 @@ const validate = (assetId, sourceType, sourceId, userId, session) => {
 // These helpers must run in the same transaction as the source document change.
 const registerAssetReference = async ({ assetId, sourceType, sourceId, userId, session }) => {
     validate(assetId, sourceType, sourceId, userId, session);
+    await fenceMediaCoverage({ session });
     const asset = await CloudinaryAsset.findOneAndUpdate(
         { _id: assetId, deletionStatus: "blocked", lifecycleStatus: { $in: ["active", null] } },
         { $inc: { fenceVersion: 1 } },
-        { new: true, session }
+        { returnDocument: "after", session }
     ).select("_id");
     if (!asset) throw new Error("Asset is unavailable for new references");
 
@@ -41,10 +43,11 @@ const registerAssetReference = async ({ assetId, sourceType, sourceId, userId, s
 
 const removeAssetReference = async ({ assetId, sourceType, sourceId, userId, session }) => {
     validate(assetId, sourceType, sourceId, userId, session);
+    await fenceMediaCoverage({ session });
     const asset = await CloudinaryAsset.findOneAndUpdate(
         { _id: assetId, deletionStatus: "blocked", lifecycleStatus: { $in: ["active", null] } },
         { $inc: { fenceVersion: 1 } },
-        { new: true, session }
+        { returnDocument: "after", session }
     ).select("_id");
     if (!asset) throw new Error("Asset is unavailable for reference changes");
     await CloudinaryAssetReference.deleteOne(
@@ -71,6 +74,7 @@ const reserveAssetDeletion = async ({ assetId, session, leaseMs = 60000 }) => {
     if (!REFERENCE_COVERAGE_COMPLETE) {
         throw new Error("Asset deletion reservation is disabled until reference coverage is complete");
     }
+    await requireCompleteMediaCoverage({ session });
     const now = new Date();
     const token = crypto.randomUUID();
     const reference = await CloudinaryAssetReference.exists({ asset: assetId }).session(session);
@@ -91,7 +95,7 @@ const reserveAssetDeletion = async ({ assetId, session, leaseMs = 60000 }) => {
                 leaseExpiresAt: new Date(now.getTime() + leaseMs) },
             $inc: { fenceVersion: 1 }
         },
-        { new: true, session }
+        { returnDocument: "after", session }
     ).select("_id fenceVersion leaseExpiresAt");
     if (!asset) throw new Error("Asset cannot be reserved");
 
@@ -103,6 +107,7 @@ const transitionReservation = async ({ assetId, token, fenceVersion, session, ac
     if (action === "start" && !REFERENCE_COVERAGE_COMPLETE) {
         throw new Error("Asset deletion is disabled until reference coverage is complete");
     }
+    if (action === "start") await requireCompleteMediaCoverage({ session });
     if (action === "start" && await AssetModerationHold.exists({ $or: [{ asset: assetId, status: "active" }, { status: "unresolved" }] }).session(session)) {
         throw new Error("Asset moderation or identity is unresolved");
     }
@@ -125,7 +130,7 @@ const transitionReservation = async ({ assetId, token, fenceVersion, session, ac
         { _id: assetId, lifecycleStatus: transition.from, reservationToken: token,
             fenceVersion, leaseExpiresAt: { $gt: now } },
         update,
-        { new: true, session }
+        { returnDocument: "after", session }
     ).select("_id fenceVersion lifecycleStatus leaseExpiresAt");
     if (!asset) throw new Error("Reservation is stale or unavailable");
     return { fenceVersion: asset.fenceVersion, lifecycleStatus: asset.lifecycleStatus,
@@ -141,7 +146,7 @@ const recoverInProgressReservation = async ({ assetId, session, leaseMs = 60000 
         { _id: assetId, lifecycleStatus: "deletion_in_progress", leaseExpiresAt: { $lte: now } },
         { $set: { reservationToken: token, leaseExpiresAt: new Date(now.getTime() + leaseMs) },
             $inc: { fenceVersion: 1 } },
-        { new: true, session }
+        { returnDocument: "after", session }
     ).select("_id fenceVersion leaseExpiresAt");
     if (!asset) throw new Error("In-progress reservation is not recoverable");
     return { token, fenceVersion: asset.fenceVersion, leaseExpiresAt: asset.leaseExpiresAt,

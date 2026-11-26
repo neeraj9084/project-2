@@ -8,7 +8,10 @@ import { Conversation } from "../models/conversation.model.js";
 import { PendingUser } from "../models/pendingUser.model.js";
 import { Notification } from "../models/notification.model.js";
 import { CloudinaryAsset } from "../models/cloudinaryAsset.model.js";
+import { CloudinaryAssetReference } from "../models/cloudinaryAssetReference.model.js";
 import { registerAssetReference } from "./cloudinaryAssetReference.service.js";
+import { backfillModerationHolds } from "./backfillModerationHolds.service.js";
+import { fenceMediaCoverage } from "./mediaCoverageBarrier.service.js";
 
 // Only trusted internal verification may set identityVerified. URLs and the
 // currently configured Cloudinary environment are never evidence of identity.
@@ -51,6 +54,9 @@ const inspectSlot = (document, source, slot, owner) => {
     const url = valueAt(document, urlPath);
     const path = registryPath(source, name);
     const metadata = valueAt(document, path) || {};
+    // Notification thumbnail aliases share metadata; do not treat an absent
+    // alias as a second reference to the same asset.
+    if (source === "notifications" && !url && (document.data?.videoThumbnail || document.data?.thumbnail)) return null;
     if (!url && !valueAt(document, publicIdPath) && !metadata.publicId && !metadata.asset) return null;
     const identity = {
         cloudName: metadata.cloudName,
@@ -71,34 +77,81 @@ const inspectSlot = (document, source, slot, owner) => {
     return { name, path, identity, assetId, verified: verified && (!metadata.asset || metadata.asset === assetId) };
 };
 
+// Read-only reconciliation: orphaned or ambiguous references are retained
+// until an independent review establishes retention and ownership.
+const auditRegistryReferences = async ({ cursor, limit = 100, dryRun = true } = {}) => {
+    if (typeof dryRun !== "boolean" || !Number.isSafeInteger(limit) || limit < 1 || limit > 500 ||
+        (cursor != null && (typeof cursor !== "string" || !/^[a-f0-9]{64}$/.test(cursor)))) throw new Error("Invalid registry audit options");
+    const refs = await CloudinaryAssetReference.find(cursor ? { _id: { $gt: cursor } } : {})
+        .sort({ _id: 1 }).limit(limit + 1).lean();
+    const page = refs.slice(0, limit);
+    const stats = { source: "registryReferences", dryRun, scanned: 0, matching: 0, reviewRequired: 0,
+        moderationReferences: 0, coverageComplete: false, complete: refs.length <= limit,
+        nextCursor: refs.length > limit ? page[page.length - 1]._id : null };
+    for (const ref of page) {
+        stats.scanned++;
+        if (ref.sourceType.startsWith("moderation_")) { stats.moderationReferences++; continue; }
+        let matches = 0;
+        for (const [name, config] of Object.entries(sources)) {
+            const applicable = config.slots.filter((slot) => slot[0] === ref.sourceType);
+            if (!applicable.length) continue;
+            const document = await config.model.collection.findOne({ _id: ref.sourceId });
+            if (!document) continue;
+            for (const slot of applicable) {
+                const entry = inspectSlot(document, name, slot, config.owner(document));
+                if (entry?.verified && entry.assetId === ref.asset && String(config.owner(document)) === String(ref.user)) matches++;
+            }
+        }
+        if (matches === 1) stats.matching++;
+        else stats.reviewRequired++;
+    }
+    return stats;
+};
+
 // One page per call; callers persist nextCursor after each successful page.
 // No coverage-complete flag is set here: controllers still need integration.
 const backfillMediaReferences = async ({ source, cursor, limit = 100, dryRun = true } = {}) => {
+    if (source === "registryReferences") return auditRegistryReferences({ cursor, limit, dryRun });
+    if (source === "moderationReports" || source === "moderationCopyright") {
+        const result = await backfillModerationHolds({ caseType: source === "moderationReports" ? "report" : "copyright", cursor, limit, dryRun });
+        return { ...result, source, coverageComplete: false };
+    }
     const config = sources[source];
     if (!config || !Number.isSafeInteger(limit) || limit < 1 || limit > 500 ||
-        typeof dryRun !== "boolean" || (cursor && !mongoose.isValidObjectId(cursor))) {
+        typeof dryRun !== "boolean" || (cursor != null && (typeof cursor !== "string" || !/^[a-f0-9]{24}$/i.test(cursor)))) {
         throw new Error("Invalid media backfill options");
     }
     const filter = cursor ? { _id: { $gt: new mongoose.Types.ObjectId(cursor) } } : {};
     const docs = await config.model.collection.find(filter).sort({ _id: 1 }).limit(limit + 1).toArray();
     const page = docs.slice(0, limit);
-    const stats = { scanned: 0, linked: 0, unresolved: 0, dryRun, coverageComplete: false,
-        nextCursor: docs.length > limit ? String(page[page.length - 1]._id) : null };
+    const stats = { source, scanned: 0, linked: 0, existing: 0, unresolved: 0,
+        staleReferences: 0, failed: 0, failures: [], dryRun, coverageComplete: false,
+        complete: false, nextCursor: null };
+    let lastCursor = cursor || null;
 
     for (const initial of page) {
         const process = async (document, session) => {
-            if (!document) return;
+            if (!document) throw new Error("Source document no longer exists");
+            if (session) await fenceMediaCoverage({ session });
+            const counts = { linked: 0, existing: 0, unresolved: 0, staleReferences: 0 };
             const owner = config.owner(document);
             for (const slot of config.slots) {
                 const entry = inspectSlot(document, source, slot, owner);
                 if (!entry) continue;
+                const referencesQuery = CloudinaryAssetReference.find({ sourceType: entry.name, sourceId: document._id }).lean();
+                if (session) referencesQuery.session(session);
+                const references = await referencesQuery;
+                const currentReference = entry.verified && references.some((ref) => ref.asset === entry.assetId && String(ref.user) === String(owner));
+                // Do not remove references merely because the current source differs:
+                // they may protect historical media or an in-flight migration.
+                counts.staleReferences += references.filter((ref) => !entry.verified || ref.asset !== entry.assetId || String(ref.user) !== String(owner)).length;
                 if (!entry.verified) {
-                    stats.unresolved++;
+                    counts.unresolved++;
                     if (session) await config.model.collection.updateOne({ _id: document._id },
                         { $set: { [`${entry.path}.status`]: "unresolved" } }, { session });
                     continue;
                 }
-                stats.linked++;
+                counts[currentReference ? "existing" : "linked"]++;
                 if (!session) continue;
                 await CloudinaryAsset.updateOne({ _id: entry.assetId },
                     { $setOnInsert: { ...entry.identity, deletionStatus: "blocked" } },
@@ -115,23 +168,30 @@ const backfillMediaReferences = async ({ source, cursor, limit = 100, dryRun = t
                     { $set: updates },
                     { session });
             }
+            return counts;
         };
-        if (dryRun) await process(initial, null);
-        else {
-            const session = await mongoose.startSession();
-            try {
-                // Do not count failed/retried transactions more than once.
-                const before = { linked: stats.linked, unresolved: stats.unresolved };
-                await session.withTransaction(async () => {
-                    stats.linked = before.linked;
-                    stats.unresolved = before.unresolved;
+        try {
+            let counts;
+            if (dryRun) counts = await process(initial, null);
+            else {
+                const session = await mongoose.startSession();
+                try { await session.withTransaction(async () => {
                     const document = await config.model.collection.findOne({ _id: initial._id }, { session });
-                    await process(document, session);
-                });
-            } finally { await session.endSession(); }
+                    counts = await process(document, session);
+                }); } finally { await session.endSession(); }
+            }
+            for (const key of ["linked", "existing", "unresolved", "staleReferences"]) stats[key] += counts[key];
+            stats.scanned++;
+            lastCursor = String(initial._id);
+        } catch (error) {
+            stats.failed++;
+            stats.failures.push({ sourceId: String(initial._id), message: error.message });
+            stats.nextCursor = lastCursor;
+            return stats;
         }
-        stats.scanned++;
     }
+    stats.complete = docs.length <= limit;
+    stats.nextCursor = stats.complete ? null : lastCursor;
     return stats;
 };
 

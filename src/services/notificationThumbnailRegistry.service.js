@@ -43,11 +43,15 @@ const removeNotificationThumbnails = async (notifications, { session } = {}) => 
     if (!session?.inTransaction()) throw new Error("An active transaction is required");
     for (const notification of notifications) {
         const metadata = notification.mediaRegistry?.thumbnail;
-        const url = notification.data?.videoThumbnail || notification.data?.thumbnail;
-        const verified = verifiedAttachment({ url, publicId: metadata?.publicId, resourceType: metadata?.resourceType,
-            deliveryType: metadata?.deliveryType, mediaRegistry: metadata });
-        if (url) await queueVideoMedia({ metadata: verified || { url }, kind: "notificationThumbnail",
-            videoId: notification._id, owner: notification.recipient, session });
+        const urls = [...new Set([notification.data?.videoThumbnail, notification.data?.thumbnail].filter(Boolean))];
+        let verified = null;
+        for (const url of urls) {
+            const identity = verifiedAttachment({ url, publicId: metadata?.publicId, resourceType: metadata?.resourceType,
+                deliveryType: metadata?.deliveryType, mediaRegistry: metadata });
+            if (identity) verified = identity;
+            await queueVideoMedia({ metadata: identity || { url }, kind: "notificationThumbnail",
+                videoId: notification._id, owner: notification.recipient, session });
+        }
         if (verified) await removeAssetReference({ assetId: verified.asset, sourceType: "notificationThumbnail",
             sourceId: notification._id, userId: metadata.referenceUser || notification.recipient, session });
     }

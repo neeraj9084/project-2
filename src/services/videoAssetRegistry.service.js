@@ -1,8 +1,11 @@
 import crypto from "crypto";
+import mongoose from "mongoose";
 import { getCloudinaryCloudName } from "../utils/cloudinary.js";
 import { CloudinaryAsset } from "../models/cloudinaryAsset.model.js";
 import { MediaCleanupRecord } from "../models/mediaCleanupRecord.model.js";
 import { registerAssetReference, removeAssetReference } from "./cloudinaryAssetReference.service.js";
+import { fenceMediaCoverage } from "./mediaCoverageBarrier.service.js";
+import { markUploadReferenced } from "./mediaUploadIntent.service.js";
 
 const valid = (v) => typeof v === "string" && v.trim() === v && v.length > 0;
 
@@ -27,9 +30,18 @@ const registerVideoMedia = async ({ metadata, kind, videoId, owner, session }) =
     if (!stored || stored.cloudName !== cloudName || stored.publicId !== publicId ||
         stored.resourceType !== resourceType || stored.deliveryType !== deliveryType) throw new Error("Asset identity conflict");
     await registerAssetReference({ assetId: asset, sourceType: kind, sourceId: videoId, userId: owner, session });
+    await markUploadReferenced({ metadata, kind, sourceId: videoId, user: owner, session });
 };
 
 const queueVideoMedia = async ({ metadata, kind, videoId, owner, session, suffix = "removed" }) => {
+    if (!session) {
+        const ownedSession = await mongoose.startSession();
+        try { await ownedSession.withTransaction(async () => {
+            await queueVideoMedia({ metadata, kind, videoId, owner, session: ownedSession, suffix });
+        }); } finally { await ownedSession.endSession(); }
+        return;
+    }
+    await fenceMediaCoverage({ session });
     const publicId = metadata?.publicId || null;
     const resourceType = ["video", "image", "raw"].includes(metadata?.resourceType) ? metadata.resourceType : null;
     const deliveryType = metadata?.deliveryType || null;

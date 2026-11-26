@@ -99,19 +99,8 @@ notificationSchema.index({
     createdAt: -1,
 });
 
-notificationSchema.index(
-    {
-        expiresAt: 1,
-    },
-    {
-        expireAfterSeconds: 0,
-        partialFilterExpression: {
-            expiresAt: {
-                $type: "date",
-            },
-        },
-    }
-);
+// This index does not delete documents. Existing TTL indexes require migration.
+notificationSchema.index({ expiresAt: 1, _id: 1 }, { name: "notification_expiration_scan" });
 
 export const Notification =
     mongoose.models.Notification ||

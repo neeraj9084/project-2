@@ -108,9 +108,10 @@ pendingUserSchema.pre("save", async function () {
 pendingUserSchema.index(
     {
         verificationOtpExpiry: 1,
+        _id: 1,
     },
     {
-        expireAfterSeconds: 0,
+        name: "pending_user_expiration_scan",
     }
 );
 

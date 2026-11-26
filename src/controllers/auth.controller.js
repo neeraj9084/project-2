@@ -701,10 +701,16 @@ const deactivateAccount = asyncHandler(async(req, res) => {
 
 const deleteAccount = asyncHandler(async (req, res) => {
 
+    const statusToken = crypto.randomBytes(32).toString("hex");
+    const statusTokenHash = crypto.createHash("sha256").update(statusToken).digest("hex");
+    const requestedAt = new Date();
     const user = await User.findOneAndUpdate(
         { _id: req.user._id, isActive: true, deletionRequestedAt: null },
         {
-            $set: { isActive: false, deletionRequestedAt: new Date() },
+            $set: { isActive: false, deletionRequestedAt: requestedAt,
+                deletionStatusTokenHash: statusTokenHash,
+                deletionStatusTokenExpiresAt: new Date(requestedAt.getTime() + 7 * 24 * 60 * 60 * 1000),
+                deletionLifecycle: { state: "requested", updatedAt: requestedAt, version: 0 } },
             $unset: {
                 refreshToken: 1,
                 accountRecoveryOtp: 1,
@@ -731,6 +737,8 @@ const deleteAccount = asyncHandler(async (req, res) => {
             httpOnly: true,
             secure: process.env.NODE_ENV === "production"
         })
+        .cookie("deletionStatus", statusToken, { httpOnly: true, secure: process.env.NODE_ENV === "production",
+            sameSite: "strict", path: "/api/v1/auth/deletion-status", maxAge: 7 * 24 * 60 * 60 * 1000 })
         .json(
             new ApiResponse(
                 200,
@@ -738,6 +746,21 @@ const deleteAccount = asyncHandler(async (req, res) => {
                 "Account deletion requested. Permanent deletion is pending."
             )
         );
+});
+
+// A separate short-lived capability grants status only; it cannot access APIs.
+const getDeletionStatus = asyncHandler(async (req, res) => {
+    const token = req.cookies?.deletionStatus;
+    if (typeof token !== "string" || !/^[a-f0-9]{64}$/.test(token)) throw new ApiError(401, "Status access unavailable");
+    const hash = crypto.createHash("sha256").update(token).digest("hex");
+    const user = await User.findOne({ deletionStatusTokenHash: hash, deletionStatusTokenExpiresAt: { $gt: new Date() },
+        deletionRequestedAt: { $ne: null }, isActive: false }).select("deletionRequestedAt databaseCleanupStatus +deletionLifecycle").lean();
+    if (!user) throw new ApiError(401, "Status access unavailable");
+    let state = user.deletionLifecycle?.state || "requested";
+    if (state === "completed") state = "blocked";
+    if (state === "requested" && user.databaseCleanupStatus === "complete") state = "media_review";
+    res.set("Cache-Control", "no-store");
+    return res.status(200).json(new ApiResponse(200, { state, permanentDeletionComplete: false }, "Account deletion status"));
 });
 //------------------ accountRecovery -----------------------//
 
@@ -958,6 +981,7 @@ export {
     changePassword,
     deactivateAccount,
     deleteAccount,
+    getDeletionStatus,
      accountRecovery,
     verifyAccountRecovery
 };

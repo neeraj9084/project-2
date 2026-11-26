@@ -1,12 +1,15 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
 import { User } from "../models/user.model.js";
+import { fenceMediaCoverage } from "./mediaCoverageBarrier.service.js";
 
-// Pass a session to include this atomic update in a caller's transaction.
+// Profile media is moved to private fields under the same coverage fence.
 const anonymizeUser = async (userId, { session } = {}) => {
     if (!mongoose.isValidObjectId(userId)) {
         throw new Error("Invalid user ID");
     }
+    if (!session?.inTransaction()) throw new Error("An active MongoDB transaction is required");
+    await fenceMediaCoverage({ session });
 
     const suffix = crypto.randomBytes(24).toString("hex");
     const now = new Date();
@@ -44,7 +47,7 @@ const anonymizeUser = async (userId, { session } = {}) => {
                 ]
             }
         ],
-        { new: true, session, updatePipeline: true }
+        { returnDocument: "after", session, updatePipeline: true }
     ).select("_id anonymizedAt");
 
     if (user) return user;

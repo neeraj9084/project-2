@@ -1,10 +1,12 @@
 import crypto from "crypto";
 import { CloudinaryAsset } from "../models/cloudinaryAsset.model.js";
 import { MediaCleanupRecord } from "../models/mediaCleanupRecord.model.js";
+import { fenceMediaCoverage } from "./mediaCoverageBarrier.service.js";
 
 // The caller must verify the Cloudinary environment; it is never inferred from a URL.
 const registerCleanupAsset = async (recordId, { cloudName, session } = {}) => {
     if (!session?.inTransaction()) throw new Error("An active MongoDB transaction is required");
+    await fenceMediaCoverage({ session });
     if (typeof recordId !== "string" || !recordId) throw new Error("Cleanup record ID is required");
     if (typeof cloudName !== "string" || !cloudName.trim() || cloudName !== cloudName.trim()) {
         throw new Error("Verified Cloudinary environment is required");

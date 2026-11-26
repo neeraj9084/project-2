@@ -134,7 +134,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
 
         const videoUpload =
             await uploadOnCloudinary(
-                compressedVideoPath
+                compressedVideoPath, { user: uploadOwner, sourceId: newVideoId, sourceType: "video" }
             );
 
         uploadedVideo = videoUpload;
@@ -155,7 +155,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
 
         const thumbnailUpload =
             await uploadOnCloudinary(
-                thumbnailPath
+                thumbnailPath, { user: uploadOwner, sourceId: newVideoId, sourceType: "thumbnail" }
             );
 
         uploadedThumbnail = thumbnailUpload;
@@ -849,7 +849,7 @@ const updateVideo = asyncHandler(async (req, res) => {
 
             newThumbnailUpload =
                 await uploadOnCloudinary(
-                    thumbnail.path
+                    thumbnail.path, { user: userId, sourceId: videoId, sourceType: "thumbnail" }
                 );
 
             if (

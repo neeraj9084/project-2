@@ -12,6 +12,16 @@ import { Subscribe } from "../models/subscribe.model.js";
 import { Video } from "../models/video.model.js";
 import { videoUploadIdentity, registerVideoMedia, queueVideoMedia, unregisterVideoMedia } from "../services/videoAssetRegistry.service.js";
 import { verifiedAttachment } from "../services/messageAttachmentRegistry.service.js";
+import { fenceMediaCoverage } from "../services/mediaCoverageBarrier.service.js";
+import { registerAssetReference } from "../services/cloudinaryAssetReference.service.js";
+import { CloudinaryAsset } from "../models/cloudinaryAsset.model.js";
+import { retirePendingUser } from "../services/expirePendingUser.service.js";
+
+const retireRegistration = async (id, options = {}) => {
+    const session = await mongoose.startSession();
+    try { return await session.withTransaction(() => retirePendingUser(id, { ...options, session })); }
+    finally { await session.endSession(); }
+};
 //====================== startRegistration ======================//
 
 const startRegistration = asyncHandler(async (req, res) => {
@@ -61,14 +71,6 @@ const startRegistration = asyncHandler(async (req, res) => {
         );
     }
 
-    // Remove any old pending registration
-    await PendingUser.deleteMany({
-        $or: [
-            { email: normalizedEmail },
-            { username: normalizedUsername },
-        ],
-    });
-
     // Generate OTP
     const otp = crypto
         .randomInt(100000, 1000000)
@@ -79,7 +81,11 @@ const startRegistration = asyncHandler(async (req, res) => {
     );
 
     // Create pending registration
-    await PendingUser.create({
+    const session = await mongoose.startSession();
+    try { await session.withTransaction(async () => {
+    const previous = await PendingUser.find({ $or: [{ email: normalizedEmail }, { username: normalizedUsername }] }).select("_id").session(session).lean();
+    for (const item of previous) await retirePendingUser(item._id, { session });
+    await PendingUser.create([{
         fullName: normalizedFullName,
         email: normalizedEmail,
         username: normalizedUsername,
@@ -94,7 +100,8 @@ const startRegistration = asyncHandler(async (req, res) => {
         verificationOtpAttempts: 0,
 
         isEmailVerified: false,
-    });
+    }], { session });
+    }); } finally { await session.endSession(); }
 
     // Send OTP
     await sendEmail({
@@ -154,9 +161,7 @@ const verifyRegistrationOtp = asyncHandler(async (req, res) => {
         !pendingUser.verificationOtpExpiry ||
         pendingUser.verificationOtpExpiry < new Date()
     ) {
-        await PendingUser.deleteOne({
-            _id: pendingUser._id
-        });
+        await retireRegistration(pendingUser._id, { expiredOnly: true });
 
         throw new ApiError(
             400,
@@ -172,9 +177,7 @@ const verifyRegistrationOtp = asyncHandler(async (req, res) => {
         // 5 wrong attempts
         if (pendingUser.verificationOtpAttempts >= 5) {
 
-            await PendingUser.deleteOne({
-                _id: pendingUser._id
-            });
+            await retireRegistration(pendingUser._id, { expectedOtp: pendingUser.verificationOtp });
 
             throw new ApiError(
                 429,
@@ -288,10 +291,12 @@ const completeRegistration = asyncHandler(async (req, res) => {
         );
     }
 
-    // Find pending user
-    const pendingUser = await PendingUser.findById(
-        decodedToken._id
-    );
+    const session = await mongoose.startSession();
+    let user;
+    try {
+      await session.withTransaction(async () => {
+    // Re-read and consume the pending record in the same transaction as the user.
+    const pendingUser = await PendingUser.findById(decodedToken._id).select("+mediaRegistry").session(session);
 
     if (!pendingUser) {
         throw new ApiError(
@@ -313,7 +318,7 @@ const completeRegistration = asyncHandler(async (req, res) => {
             { email: pendingUser.email },
             { username: pendingUser.username },
         ],
-    });
+    }).session(session);
 
     if (existedUser) {
         throw new ApiError(
@@ -323,7 +328,8 @@ const completeRegistration = asyncHandler(async (req, res) => {
     }
 
     // Create actual user
-    const user = await User.create({
+    await fenceMediaCoverage({ session });
+    const created = await User.create([{
         fullName: pendingUser.fullName,
         email: pendingUser.email,
         username: pendingUser.username,
@@ -335,12 +341,36 @@ const completeRegistration = asyncHandler(async (req, res) => {
         coverImage: pendingUser.coverImage || "",
 
         isVerified: true,
-    });
+    }], { session });
+    user = created[0];
+
+    for (const slot of ["avatar", "coverImage"]) {
+        const url = pendingUser[slot];
+        const metadata = pendingUser.mediaRegistry?.[slot];
+        if (!url && !metadata) continue;
+        const verified = verifiedAttachment({ url, publicId: metadata?.publicId,
+            resourceType: metadata?.resourceType, deliveryType: metadata?.deliveryType, mediaRegistry: metadata });
+        const asset = verified && await CloudinaryAsset.findOne({ _id: verified.asset, cloudName: verified.cloudName,
+            publicId: verified.publicId, resourceType: verified.resourceType, deliveryType: verified.deliveryType }).session(session).lean();
+        if (asset) {
+            await registerAssetReference({ assetId: verified.asset, sourceType: slot, sourceId: user._id, userId: user._id, session });
+            user.set(`${slot}PublicId`, verified.publicId);
+            user.set(`${slot}DeliveryType`, verified.deliveryType);
+            user.set(`mediaRegistry.${slot}`, { ...verified.toObject?.() || verified, status: "linked" });
+        } else {
+            // Keep legacy identifiers for review; they are not proof of identity.
+            user.set(`mediaRegistry.${slot}`, { ...(metadata?.toObject?.() || {}), url, status: "unresolved", identityVerified: false });
+        }
+    }
+    await user.save({ session });
 
     // Delete pending registration
-    await PendingUser.deleteOne({
+    const removed = await PendingUser.deleteOne({
         _id: pendingUser._id,
-    });
+    }, { session });
+    if (removed.deletedCount !== 1) throw new Error("Registration session changed");
+      });
+    } finally { await session.endSession(); }
 
     const safeUser = await User.findById(user._id).select(
         "-password -refreshToken"
@@ -560,7 +590,7 @@ const updateAvatar = asyncHandler(async(req, res) => {
     if(!avatarLocalPath){
         throw new ApiError(400, "Avatar file is required")
     }
-    const avatar = await uploadOnCloudinary(avatarLocalPath);
+    const avatar = await uploadOnCloudinary(avatarLocalPath, { user: req.user._id, sourceId: req.user._id, sourceType: "avatar" });
 
     if(!avatar){
         throw new ApiError(400, "Avatar upload failed")
@@ -587,7 +617,7 @@ const updateCoverImage = asyncHandler(async(req, res) => {
         throw new ApiError(400, "Cover file required")
     }
   
-    const coverImage = await uploadOnCloudinary(coverImageLocalPath)
+    const coverImage = await uploadOnCloudinary(coverImageLocalPath, { user: req.user._id, sourceId: req.user._id, sourceType: "coverImage" })
 
     if(!coverImage){
         throw new ApiError(400, "Cover image upload failed")

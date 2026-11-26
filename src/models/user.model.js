@@ -171,6 +171,24 @@ const userSchema = new Schema(
             select: false,
         },
 
+        deletionLifecycle: {
+            type: {
+                state: { type: String, enum: ["requested", "database_cleanup", "media_review", "media_cleanup", "blocked", "failed", "completed"], default: "requested" },
+                updatedAt: Date,
+                version: { type: Number, default: 0 },
+                claimToken: { type: String, select: false },
+                claimExpiresAt: Date,
+                retryCount: { type: Number, default: 0 },
+                nextRetryAt: Date,
+                lastError: String,
+                testOnly: { type: Boolean, default: false }
+            },
+            select: false
+        },
+        deletionStatusTokenHash: { type: String, select: false },
+        deletionStatusTokenExpiresAt: { type: Date, select: false },
+        testLifecycleFixture: { type: Boolean, default: false, select: false },
+
         deletionMedia: {
             type: {
                 avatar: { type: String, default: "" },

@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { MediaCleanupRecord } from "../models/mediaCleanupRecord.model.js";
 import { removeAssetReference } from "./cloudinaryAssetReference.service.js";
+import { fenceMediaCoverage } from "./mediaCoverageBarrier.service.js";
 
 // Never derive an identity from a URL or treat partially verified metadata as safe.
 const verifiedAttachment = (attachment) => {
@@ -16,6 +17,7 @@ const verifiedAttachment = (attachment) => {
 
 const retireMessageAttachment = async (message, { session } = {}) => {
     if (!session?.inTransaction()) throw new Error("An active transaction is required");
+    await fenceMediaCoverage({ session });
     const attachment = message.attachment;
     if (!attachment) return;
     const metadata = verifiedAttachment(attachment);

@@ -14,6 +14,7 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "test": "node --test",
+    "test:integration": "node --test --test-concurrency=1 tests/integration/*.test.js",
     "lint": "eslint ."
   },
   "devDependencies": {

@@ -127,6 +127,7 @@ momentSchema.index({
     owner: 1,
     createdAt: -1
 });
+momentSchema.index({ expiresAt: 1, _id: 1 }, { name: "moment_expiration_scan" });
 
 export const Moment =
     mongoose.models.Moment ||

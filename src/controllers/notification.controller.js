@@ -7,6 +7,8 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { removeNotificationThumbnails } from "../services/notificationThumbnailRegistry.service.js";
 
+const visibleNotificationFilter = (now) => ({ $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] });
+
 //====================== getMyNotifications ============================//
 
 const getMyNotifications = asyncHandler(async (req, res) => {
@@ -74,6 +76,7 @@ const getMyNotifications = asyncHandler(async (req, res) => {
 
     const filter = {
         recipient: userId,
+        ...visibleNotificationFilter(new Date()),
     };
 
     if (rawIsRead !== undefined) {
@@ -114,6 +117,7 @@ const getMyNotifications = asyncHandler(async (req, res) => {
             Notification.countDocuments({
                 recipient: userId,
                 isRead: false,
+                ...visibleNotificationFilter(new Date()),
             }),
         ]);
 
@@ -214,6 +218,7 @@ const getUnreadNotifications = asyncHandler(async (req, res) => {
     const filter = {
         recipient: userId,
         isRead: false,
+        ...visibleNotificationFilter(new Date()),
     };
 
     const skip = (page - 1) * limit;
@@ -272,6 +277,7 @@ const getUnreadNotificationCount = asyncHandler(async (req, res) => {
     const unreadCount = await Notification.countDocuments({
         recipient: userId,
         isRead: false,
+        ...visibleNotificationFilter(new Date()),
     });
 
     return res.status(200).json(
@@ -314,6 +320,7 @@ const markNotificationAsRead = asyncHandler(async (req, res) => {
             _id: notificationId,
             recipient: userId,
             isRead: false,
+            ...visibleNotificationFilter(new Date()),
         },
         {
             $set: {
@@ -360,6 +367,7 @@ const markAllNotificationsAsRead = asyncHandler(async (req, res) => {
         {
             recipient: userId,
             isRead: false,
+            ...visibleNotificationFilter(new Date()),
         },
         {
             $set: {

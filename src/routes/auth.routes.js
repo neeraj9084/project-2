@@ -15,6 +15,7 @@ import {
     changePassword,
     deactivateAccount,
     deleteAccount,
+    getDeletionStatus,
     accountRecovery,
     verifyAccountRecovery,
 } from "../controllers/auth.controller.js";
@@ -83,6 +84,8 @@ router
         verifyJWT,
         deleteAccount
     );
+
+router.get("/deletion-status", otpLimiter, getDeletionStatus);
 
 
 // ==================== ACCOUNT RECOVERY ====================

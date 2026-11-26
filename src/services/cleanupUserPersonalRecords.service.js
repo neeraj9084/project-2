@@ -16,11 +16,13 @@ import { recordMomentMedia } from "./expireMoment.service.js";
 import { verifiedAttachment } from "./messageAttachmentRegistry.service.js";
 import { unregisterVideoMedia } from "./videoAssetRegistry.service.js";
 import { removeNotificationThumbnails } from "./notificationThumbnailRegistry.service.js";
+import { fenceMediaCoverage } from "./mediaCoverageBarrier.service.js";
 
 // Run group ownership cleanup first; the caller owns the transaction and retries.
 const cleanupUserPersonalRecords = async (userId, { session } = {}) => {
     if (!mongoose.isValidObjectId(userId)) throw new Error("Invalid user ID");
     if (!session?.inTransaction()) throw new Error("An active MongoDB transaction is required");
+    await fenceMediaCoverage({ session });
 
     const user = await User.findOne({
         _id: userId, isActive: false,
@@ -73,7 +75,7 @@ const cleanupUserPersonalRecords = async (userId, { session } = {}) => {
 
     const attachments = await Message.find({
         sender: user._id, attachment: { $ne: null }
-    }).select("_id attachment +attachment.mediaRegistry").session(session).lean();
+    }).select("_id attachment.url attachment.publicId attachment.resourceType attachment.deliveryType +attachment.mediaRegistry").session(session).lean();
     for (const message of attachments) {
         const attachment = message.attachment;
         const resourceType = ["image", "video", "raw"].includes(attachment.resourceType)

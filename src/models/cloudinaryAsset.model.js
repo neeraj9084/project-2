@@ -15,7 +15,10 @@ const cloudinaryAssetSchema = new mongoose.Schema({
         default: "active"
     },
     reservationToken: { type: String, default: null, select: false },
-    leaseExpiresAt: { type: Date, default: null }
+    leaseExpiresAt: { type: Date, default: null },
+    cleanupLeaseToken: { type: String, default: null, select: false },
+    cleanupLeaseExpiresAt: { type: Date, default: null },
+    cleanupFenceVersion: { type: Number, default: 0, min: 0 }
 }, { timestamps: true, versionKey: false });
 
 cloudinaryAssetSchema.index(

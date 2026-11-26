@@ -11,6 +11,8 @@ const schema = new mongoose.Schema({
     status: { type: String, enum: ["active", "unresolved", "released"], required: true },
     retentionUntil: { type: Date, default: null },
     retentionApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    approvedAt: { type: Date, default: null },
+    approvalReason: { type: String, default: null, maxlength: 500 },
     releasedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     releasedAt: { type: Date, default: null }
 }, { timestamps: true, versionKey: false });

@@ -162,7 +162,7 @@ if (otherParticipant) {
     if (file) {
 
         uploadedFile =
-            await uploadOnCloudinary(file.path);
+            await uploadOnCloudinary(file.path, { user: currentUserId, sourceId: newMessageId, sourceType: "attachment" });
 
         if (!uploadedFile) {
             throw new ApiError(

@@ -20,7 +20,13 @@ const mediaCleanupRecordSchema = new mongoose.Schema({
     nextRetryAt: { type: Date, default: null },
     lastError: { type: String, default: null },
     leaseOwner: { type: String, default: null },
-    leaseExpiresAt: { type: Date, default: null }
+    leaseExpiresAt: { type: Date, default: null },
+    claimToken: { type: String, default: null, select: false },
+    claimFenceVersion: { type: Number, default: null },
+    operationState: { type: String, enum: ["not_started", "uncertain"], default: "not_started" },
+    retentionDecision: { type: String, enum: ["retain_shared", "retain_moderation", null], default: null },
+    retentionVerifiedAt: { type: Date, default: null },
+    retentionEvidence: { type: String, default: null, select: false }
 }, { timestamps: true, versionKey: false });
 
 mediaCleanupRecordSchema.index({ status: 1, nextRetryAt: 1, leaseExpiresAt: 1 });

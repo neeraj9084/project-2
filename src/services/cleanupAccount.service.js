@@ -20,7 +20,7 @@ const cleanupAccount = async (userId) => {
                 { _id: userId, isActive: false, deletionRequestedAt: { $ne: null },
                     databaseCleanupStatus: { $ne: "complete" } },
                 { $set: { databaseCleanupStatus: "pending", databaseCleanupClaim: crypto.randomUUID() } },
-                { new: true, session, timestamps: false }
+                { returnDocument: "after", session, timestamps: false }
             ).select("_id");
 
             if (!user) {

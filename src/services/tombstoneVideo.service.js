@@ -3,6 +3,7 @@ import { Video } from "../models/video.model.js";
 import { MediaCleanupRecord } from "../models/mediaCleanupRecord.model.js";
 import { registerAssetReference } from "./cloudinaryAssetReference.service.js";
 import { verifiedAttachment } from "./messageAttachmentRegistry.service.js";
+import { fenceMediaCoverage } from "./mediaCoverageBarrier.service.js";
 
 // Media records and the tombstone must commit together.
 const tombstoneVideo = async (videoId, { session } = {}) => {
@@ -12,6 +13,7 @@ const tombstoneVideo = async (videoId, { session } = {}) => {
     if (!session?.inTransaction()) {
         throw new Error("An active MongoDB transaction is required");
     }
+    await fenceMediaCoverage({ session });
 
     const video = await Video.findOneAndUpdate(
         { _id: videoId, isDeleted: { $ne: true } },
@@ -34,7 +36,7 @@ const tombstoneVideo = async (videoId, { session } = {}) => {
             isDeleted: true,
             deletedAt: new Date()
         } }],
-        { new: true, session, updatePipeline: true }
+        { returnDocument: "after", session, updatePipeline: true }
     ).select("_id owner isDeleted deletedAt +deletionMedia +mediaRegistry");
 
     const tombstone = video || await Video.findById(videoId)
