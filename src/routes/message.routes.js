@@ -14,7 +14,7 @@ import {
 } from "../controllers/message.controller.js";
 
 import { verifyJWT } from "../middlewares/auth.middleware.js";
-import { upload } from "../middlewares/multer.middleware.js";
+import { authorizeMessageUpload, parseMessageUpload } from "../middlewares/messageUpload.middleware.js";
 
 const router = Router();
 
@@ -22,7 +22,8 @@ router.use(verifyJWT);
 
 router.post(
     "/:conversationId",
-    upload.array("media", 10),
+    authorizeMessageUpload,
+    parseMessageUpload,
     sendMessage
 );
 

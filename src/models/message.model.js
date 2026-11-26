@@ -112,6 +112,9 @@ const messageSchema = new mongoose.Schema(
             default: null
         },
 
+        // Canonical attachments; `attachment` mirrors the first for old clients.
+        attachments: { type: [attachmentSchema], default: undefined, validate: { validator: (items) => !items || items.length <= 2, message: "At most two attachments are allowed" } },
+
         replyTo: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Message",

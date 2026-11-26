@@ -22,7 +22,9 @@ const directReadStatusSchema = new mongoose.Schema(
         isHidden: {
             type: Boolean,
             default: false
-        }
+        },
+
+        isArchived: { type: Boolean, default: false }
     },
     {
         _id: false
@@ -86,7 +88,9 @@ const conversationSchema = new mongoose.Schema(
         isActive: {
             type: Boolean,
             default: true
-        }
+        },
+        // Serializes all group membership mutations on the conversation record.
+        membershipVersion: { type: Number, default: 0 }
     },
     {
         timestamps: true,

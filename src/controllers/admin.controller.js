@@ -1,3 +1,4 @@
+import { updateModerationStatus } from "../services/moderationStatus.service.js";
 import mongoose from "mongoose";
 import { User } from "../models/user.model.js";
 import { Video } from "../models/video.model.js";
@@ -1217,106 +1218,11 @@ const getVideoReportById = asyncHandler(async (req, res) => {
 //====================== updateVideoReportStatus ==========================//
 
 const updateVideoReportStatus = asyncHandler(async (req, res) => {
-    const { reportId } = req.params;
-    const { status } = req.body;
-
-    if (!reportId || !mongoose.isValidObjectId(reportId)) {
-        throw new ApiError(400, "Valid report ID is required");
-    }
-
-    const allowedStatuses = [
-        "pending",
-        "reviewed",
-        "resolved",
-        "rejected",
-    ];
-
-    if (!status || !allowedStatuses.includes(status)) {
-        throw new ApiError(
-            400,
-            `Status must be one of: ${allowedStatuses.join(", ")}`
-        );
-    }
-
-    let report;
-    const session = await mongoose.startSession();
-    try { await session.withTransaction(async () => {
-    if (["pending", "reviewed"].includes(status) && await AssetModerationHold.exists({ caseType: "report", caseId: reportId, status: "released" }).session(session)) {
-        throw new ApiError(409, "Released moderation holds require a new investigation");
-    }
-    report = await Report.findOneAndUpdate(
-        {
-            _id: reportId,
-        },
-        {
-            $set: {
-                status,
-                reviewedBy: req.user._id,
-                reviewedAt: new Date(),
-            },
-        },
-        {
-            new: true,
-            runValidators: true,
-        }
-    )
-        .select(
-            "_id reporter video reason description status reviewedBy reviewedAt createdAt updatedAt"
-        )
-        .populate({
-            path: "video",
-            select: "_id title thumbnail owner",
-            populate: {
-                path: "owner",
-                select: "_id username fullName avatar",
-            },
-        })
-        .session(session).lean();
-    }); } finally { await session.endSession(); }
-
-    if (!report) {
-        throw new ApiError(404, "Video report not found");
-    }
-
-    try {
-        await Notification.create({
-            recipient: report.reporter,
-            actor: req.user._id,
-
-            type: "video_report_update",
-
-            title: "Video Report Status Updated",
-
-            message: `Your video report has been ${status}.`,
-
-            entityType: "report",
-            entityId: report._id,
-
-            data: {
-                reportId: report._id,
-                reportType: "video",
-                videoId: report.video?._id || null,
-                videoTitle: report.video?.title || null,
-                reason: report.reason,
-                description: report.description,
-                status: report.status,
-                reviewedAt: report.reviewedAt,
-            },
-        });
-    } catch (error) {
-        console.error(
-            "Failed to create video report notification:",
-            error.message
-        );
-    }
-
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            report,
-            "Video report status updated successfully"
-        )
-    );
+    const id = req.params.reportId; const { status } = req.body || {};
+    if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Valid report ID is required");
+    if (!["pending","reviewed","resolved","rejected"].includes(status)) throw new ApiError(400, "Invalid status");
+    const report = await updateModerationStatus({ kind: "video", id, status, actor: req.user._id });
+    return res.status(200).json(new ApiResponse(200, report, "Video report status updated successfully"));
 });
 
 //====================== getUserReports ==========================//
@@ -1647,102 +1553,11 @@ const getUserReportById = asyncHandler(async (req, res) => {
 //====================== updateUserReportStatus ==========================//
 
 const updateUserReportStatus = asyncHandler(async (req, res) => {
-    const { reportId } = req.params;
-    const { status } = req.body;
-
-    if (!reportId || !mongoose.isValidObjectId(reportId)) {
-        throw new ApiError(400, "Valid report ID is required");
-    }
-
-    const allowedStatuses = [
-        "pending",
-        "reviewed",
-        "resolved",
-        "rejected",
-    ];
-
-    if (!status || !allowedStatuses.includes(status)) {
-        throw new ApiError(
-            400,
-            `Status must be one of: ${allowedStatuses.join(", ")}`
-        );
-    }
-
-    const report = await UserReport.findOneAndUpdate(
-        {
-            _id: reportId,
-            reportType: "user",
-        },
-        {
-            $set: {
-                status,
-                reviewedBy: req.user._id,
-                reviewedAt: new Date(),
-            },
-        },
-        {
-            new: true,
-            runValidators: true,
-        }
-    )
-        .select(
-            "_id reporter reportType reportedUser reason description status reviewedBy reviewedAt createdAt updatedAt"
-        )
-        .populate({
-            path: "reporter",
-            select: "_id username fullName avatar",
-        })
-        .populate({
-            path: "reportedUser",
-            select: "_id username fullName avatar",
-        })
-        .populate({
-            path: "reviewedBy",
-            select: "_id username fullName avatar",
-        })
-        .lean();
-
-    if (!report) {
-        throw new ApiError(404, "User report not found");
-    }
-
-    try {
-        await Notification.create({
-            recipient: report.reporter._id,
-            actor: req.user._id,
-
-            type: "report_update",
-
-            title: "Report Status Updated",
-
-            message: `Your report has been ${status}.`,
-
-            entityType: "report",
-            entityId: report._id,
-
-            data: {
-                reportId: report._id,
-                reportType: report.reportType,
-                reason: report.reason,
-                description: report.description,
-                status: report.status,
-                reviewedAt: report.reviewedAt,
-            },
-        });
-    } catch (error) {
-        console.error(
-            "Failed to create report notification:",
-            error.message
-        );
-    }
-
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            report,
-            "User report status updated successfully"
-        )
-    );
+    const id = req.params.reportId; const { status } = req.body || {};
+    if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Valid report ID is required");
+    if (!["pending","reviewed","resolved","rejected"].includes(status)) throw new ApiError(400, "Invalid status");
+    const report = await updateModerationStatus({ kind: "user", id, status, actor: req.user._id });
+    return res.status(200).json(new ApiResponse(200, report, "User report status updated successfully"));
 });
 
 
@@ -2066,129 +1881,11 @@ const getCopyrightClaimById = asyncHandler(async (req, res) => {
 //====================== updateCopyrightClaimStatus ==========================//
 
 const updateCopyrightClaimStatus = asyncHandler(async (req, res) => {
-    const { claimId } = req.params;
-    const { status } = req.body || {};
-
-    if (!claimId || !mongoose.isValidObjectId(claimId)) {
-        throw new ApiError(
-            400,
-            "Valid copyright claim ID is required"
-        );
-    }
-
-    const allowedStatuses = [
-        "pending",
-        "approved",
-        "rejected",
-    ];
-
-    if (
-        typeof status !== "string" ||
-        !allowedStatuses.includes(status)
-    ) {
-        throw new ApiError(
-            400,
-            `Status must be one of: ${allowedStatuses.join(", ")}`
-        );
-    }
-
-    let claim;
-    const session = await mongoose.startSession();
-    try { await session.withTransaction(async () => {
-    if (status === "pending" && await AssetModerationHold.exists({ caseType: "copyright", caseId: claimId, status: "released" }).session(session)) {
-        throw new ApiError(409, "Released moderation holds require a new investigation");
-    }
-    claim = await CopyrightClaim.findByIdAndUpdate(
-        claimId,
-        {
-            $set: {
-                status,
-                reviewedBy: req.user._id,
-                reviewedAt: new Date(),
-            },
-        },
-        {
-            new: true,
-            runValidators: true,
-        }
-    )
-        .select(
-            "_id claimant video reason description status reviewedBy reviewedAt createdAt updatedAt"
-        )
-        .populate({
-            path: "claimant",
-            select: "_id username fullName avatar isActive",
-        })
-        .populate({
-            path: "video",
-            select: "_id title thumbnail owner",
-            populate: {
-                path: "owner",
-                select: "_id username fullName avatar",
-            },
-        })
-        .populate({
-            path: "reviewedBy",
-            select: "_id username fullName avatar",
-        })
-        .session(session).lean();
-    }); } finally { await session.endSession(); }
-
-    if (!claim) {
-        throw new ApiError(
-            404,
-            "Copyright claim not found"
-        );
-    }
-
-    try {
-        const notificationMessages = {
-            pending:
-                "Your copyright claim has been moved back to pending review.",
-            approved:
-                "Your copyright claim has been approved.",
-            rejected:
-                "Your copyright claim has been rejected.",
-        };
-
-        await Notification.create({
-            recipient: claim.claimant._id,
-            actor: req.user._id,
-
-            type: "system",
-
-            title: "Copyright Claim Status Updated",
-
-            message: notificationMessages[status],
-
-            entityType: "report",
-            entityId: claim._id,
-
-            data: {
-                claimId: claim._id,
-                claimType: "copyright",
-                videoId: claim.video?._id || null,
-                videoTitle: claim.video?.title || null,
-                reason: claim.reason,
-                description: claim.description,
-                status: claim.status,
-                reviewedAt: claim.reviewedAt,
-            },
-        });
-    } catch (error) {
-        console.error(
-            "Failed to create copyright claim notification:",
-            error.message
-        );
-    }
-
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            claim,
-            "Copyright claim status updated successfully"
-        )
-    );
+    const id = req.params.claimId; const { status } = req.body || {};
+    if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Valid report ID is required");
+    if (!["pending","approved","rejected"].includes(status)) throw new ApiError(400, "Invalid status");
+    const report = await updateModerationStatus({ kind: "copyright", id, status, actor: req.user._id });
+    return res.status(200).json(new ApiResponse(200, report, "Copyright claim status updated successfully"));
 });
 
 //====================== getUserAnalytics ==========================//

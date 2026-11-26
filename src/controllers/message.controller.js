@@ -10,8 +10,9 @@ import { ConversationMember } from "../models/conversationMember.model.js";
 import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 import { Notification } from "../models/notification.model.js";
 import { videoUploadIdentity, registerVideoMedia, queueVideoMedia } from "../services/videoAssetRegistry.service.js";
-import { verifiedAttachment, retireMessageAttachment } from "../services/messageAttachmentRegistry.service.js";
+import { verifiedAttachment, retireMessageAttachment, messageAttachments } from "../services/messageAttachmentRegistry.service.js";
 import { registerAssetReference } from "../services/cloudinaryAssetReference.service.js";
+import { BlockedUser } from "../models/blockedUser.model.js";
 
 // ====================== sendMessage ====================== //
 
@@ -131,7 +132,7 @@ if (otherParticipant) {
             ? content.trim()
             : null;
 
-   const file = req.files?.[0] || null;
+   const files = req.files || [];
 
     if (type === "text" && !trimmedContent) {
         throw new ApiError(
@@ -147,22 +148,19 @@ if (otherParticipant) {
         "file"
     ];
 
-    if (mediaTypes.includes(type) && !file) {
+    if (mediaTypes.includes(type) && !files.length) {
         throw new ApiError(
             400,
             "File is required for this message type"
         );
     }
 
-    let attachment = null;
-    let uploadedFile = null;
-    let metadata = null;
+    const attachments = [];
+    const uploadedMetadata = [];
     const newMessageId = new mongoose.Types.ObjectId();
 
-    if (file) {
-
-        uploadedFile =
-            await uploadOnCloudinary(file.path, { user: currentUserId, sourceId: newMessageId, sourceType: "attachment" });
+    try { for (const file of files) {
+        const uploadedFile = await uploadOnCloudinary(file.path, { user: currentUserId, sourceId: newMessageId, sourceType: "attachment" });
 
         if (!uploadedFile) {
             throw new ApiError(
@@ -173,7 +171,8 @@ if (otherParticipant) {
 
         try {
             if (!["image", "video", "raw"].includes(uploadedFile.resource_type)) throw new Error("Invalid resource type");
-            metadata = videoUploadIdentity(uploadedFile, uploadedFile.resource_type);
+            const metadata = videoUploadIdentity(uploadedFile, uploadedFile.resource_type);
+            uploadedMetadata.push(metadata);
         } catch (error) {
             try { await queueVideoMedia({ metadata: { url: uploadedFile.secure_url, publicId: uploadedFile.public_id,
                 resourceType: uploadedFile.resource_type, deliveryType: uploadedFile.type }, kind: "attachment",
@@ -181,7 +180,8 @@ if (otherParticipant) {
             catch (queueError) { console.error("Failed to queue attachment:", queueError); }
             throw error;
         }
-        attachment = {
+        const metadata = uploadedMetadata[uploadedMetadata.length - 1];
+        attachments.push({
             url: uploadedFile.secure_url,
             publicId: uploadedFile.public_id,
             resourceType: uploadedFile.resource_type || null,
@@ -190,7 +190,11 @@ if (otherParticipant) {
             mimeType: file.mimetype,
             size: file.size,
             mediaRegistry: metadata
-        };
+        });
+    } } catch (error) {
+        for (const metadata of uploadedMetadata) try { await queueVideoMedia({ metadata, kind: "attachment", videoId: newMessageId, owner: currentUserId, suffix: "failed-upload" }); }
+        catch (queueError) { console.error("Failed to queue attachment:", queueError); }
+        throw error;
     }
 
     const cleanClientMessageId =
@@ -203,7 +207,8 @@ if (otherParticipant) {
         sender: currentUserId,
         type,
         content: trimmedContent,
-        attachment
+        attachment: attachments[0] || null,
+        attachments: attachments.length ? attachments : undefined
     };
 
     if (cleanClientMessageId) {
@@ -215,14 +220,23 @@ if (otherParticipant) {
     const session = await mongoose.startSession();
     try {
         await session.withTransaction(async () => {
-            if (metadata) await registerVideoMedia({ metadata, kind: "attachment", videoId: newMessageId, owner: currentUserId, session });
+            if (conversation.type === "direct") {
+                const current = await Conversation.findOne({ _id: conversationId, type: "direct", isActive: true, participants: currentUserId }).session(session).lean();
+                if (!current) throw new ApiError(403, "Conversation unavailable");
+                const other = current.participants.find((id) => String(id) !== String(currentUserId));
+                if (other && await BlockedUser.exists({ $or: [{ blocker: currentUserId, blockedUser: other }, { blocker: other, blockedUser: currentUserId }] }).session(session)) throw new ApiError(403, "Conversation unavailable");
+            }
+            if (conversation.type === "group" && !await ConversationMember.exists({ conversation: conversationId, user: currentUserId, isActive: true }).session(session)) {
+                throw new ApiError(403, "Active group membership required");
+            }
+            for (const metadata of uploadedMetadata) await registerVideoMedia({ metadata, kind: "attachment", videoId: newMessageId, owner: currentUserId, session });
             [message] = await Message.create([{ ...messageData, _id: newMessageId }], { session });
             const updated = await Conversation.updateOne({ _id: conversationId, isActive: true },
                 { $set: { lastMessage: message._id, lastMessageAt: message.createdAt } }, { session });
             if (!updated.matchedCount) throw new ApiError(404, "Conversation not found");
         });
     } catch (error) {
-        if (metadata) try { await queueVideoMedia({ metadata, kind: "attachment", videoId: newMessageId,
+        for (const metadata of uploadedMetadata) try { await queueVideoMedia({ metadata, kind: "attachment", videoId: newMessageId,
             owner: currentUserId, suffix: "failed-upload" }); }
         catch (queueError) { console.error("Failed to queue attachment:", queueError); }
         throw error;
@@ -578,7 +592,17 @@ const editMessage = asyncHandler(async (req, res) => {
     message.isEdited = true;
     message.editedAt = new Date();
 
-    await message.save();
+    if (conversation.type === "group") {
+        const session = await mongoose.startSession();
+        try { await session.withTransaction(async () => {
+            if (!await ConversationMember.exists({ conversation: conversation._id, user: currentUserId, isActive: true }).session(session)) throw new ApiError(403, "Active group membership required");
+            const locked = await Conversation.updateOne({ _id: conversation._id, type: "group", isActive: true }, { $inc: { membershipVersion: 1 } }, { session });
+            if (!locked.matchedCount) throw new ApiError(404, "Conversation not found");
+            const edited = await Message.updateOne({ _id: messageId, sender: currentUserId, isDeleted: false },
+                { $set: { content: trimmedContent, isEdited: true, editedAt: message.editedAt } }, { session });
+            if (!edited.matchedCount) throw new ApiError(404, "Message not found");
+        }); } finally { await session.endSession(); }
+    } else await message.save();
 
     await message.populate(
         "sender",
@@ -618,8 +642,15 @@ const deleteMessage = asyncHandler(async (req, res) => {
     try {
         await session.withTransaction(async () => {
             const message = await Message.findOne({ _id: messageId, sender: currentUserId })
-                .select("+attachment.mediaRegistry").session(session).lean();
+                .select("+attachment.mediaRegistry +attachments.mediaRegistry").session(session).lean();
             if (!message) throw new ApiError(404, "Message not found or you are not the sender");
+            const conversation = await Conversation.findById(message.conversation).session(session).lean();
+            if (!conversation?.isActive) throw new ApiError(404, "Conversation not found");
+            if (conversation.type === "group") {
+                if (!await ConversationMember.exists({ conversation: conversation._id, user: currentUserId, isActive: true }).session(session)) throw new ApiError(403, "Active group membership required");
+                const locked = await Conversation.updateOne({ _id: conversation._id, isActive: true }, { $inc: { membershipVersion: 1 } }, { session });
+                if (!locked.matchedCount) throw new ApiError(404, "Conversation not found");
+            }
             await retireMessageAttachment(message, { session });
             await Message.deleteOne({ _id: messageId, sender: currentUserId }, { session });
         });
@@ -1242,17 +1273,20 @@ const replyToMessage = asyncHandler(async (req, res) => {
             cleanClientMessageId;
     }
 
-    const message = await Message.create(
-        messageData
-    );
-
-    conversation.lastMessage =
-        message._id;
-
-    conversation.lastMessageAt =
-        message.createdAt;
-
-    await conversation.save();
+    let message;
+    if (conversation.type === "group") {
+        const session = await mongoose.startSession();
+        try { await session.withTransaction(async () => {
+            if (!await ConversationMember.exists({ conversation: conversationId, user: currentUserId, isActive: true }).session(session)) throw new ApiError(403, "Active group membership required");
+            [message] = await Message.create([messageData], { session });
+            const updated = await Conversation.updateOne({ _id: conversationId, type: "group", isActive: true }, { $set: { lastMessage: message._id, lastMessageAt: message.createdAt } }, { session });
+            if (!updated.matchedCount) throw new ApiError(404, "Conversation not found");
+        }); } finally { await session.endSession(); }
+    } else {
+        message = await Message.create(messageData);
+        conversation.lastMessage = message._id; conversation.lastMessageAt = message.createdAt;
+        await conversation.save();
+    }
 
     await message.populate([
         {
@@ -1483,17 +1517,28 @@ const forwardMessage = asyncHandler(async (req, res) => {
     const session = await mongoose.startSession();
     try {
         await session.withTransaction(async () => {
+            if (sourceConversation.type === "group") {
+                const sourceMember = await ConversationMember.findOne({ conversation: sourceConversation._id, user: currentUserId, isActive: true }).select("clearedAt").session(session).lean();
+                if (!sourceMember) throw new ApiError(403, "Active group membership required");
+                const locked = await Conversation.updateOne({ _id: sourceConversation._id, type: "group", isActive: true }, { $inc: { membershipVersion: 1 } }, { session });
+                if (!locked.matchedCount) throw new ApiError(404, "Conversation not found");
+                clearedAt = sourceMember.clearedAt || null;
+            }
+            if (conversation.type === "group" && !await ConversationMember.exists({ conversation: conversationId, user: currentUserId, isActive: true }).session(session)) throw new ApiError(403, "Active group membership required");
             const currentSource = await Message.findOne({ _id: sourceMessage._id, isDeleted: false })
-                .select("+attachment.mediaRegistry").session(session).lean();
+                .select("+attachment.mediaRegistry +attachments.mediaRegistry").session(session).lean();
             if (!currentSource || String(currentSource.conversation) !== String(sourceMessage.conversation) ||
                 (clearedAt && currentSource.createdAt <= clearedAt)) throw new ApiError(404, "Message not found");
-            if (currentSource.attachment) {
-                const metadata = verifiedAttachment(currentSource.attachment);
+            const currentAttachments = messageAttachments(currentSource);
+            const forwardedAttachments = [];
+            for (const attachment of currentAttachments) {
+                const metadata = verifiedAttachment(attachment);
                 if (!metadata) throw new ApiError(409, "Attachment identity requires verification before forwarding");
-                await registerAssetReference({ assetId: metadata.asset, sourceType: "attachment", sourceId: forwardedId,
-                    userId: currentUserId, session });
-                messageData.attachment = { ...currentSource.attachment, mediaRegistry: metadata };
-            } else if (sourceMessage.attachment) throw new ApiError(404, "Message not found");
+                await registerAssetReference({ assetId: metadata.asset, sourceType: "attachment", sourceId: forwardedId, userId: currentUserId, session });
+                forwardedAttachments.push({ ...attachment, mediaRegistry: metadata });
+            }
+            if (forwardedAttachments.length) { messageData.attachment = forwardedAttachments[0]; messageData.attachments = forwardedAttachments; }
+            else if (sourceMessage.attachment || sourceMessage.attachments?.length) throw new ApiError(404, "Message not found");
             [forwardedMessage] = await Message.create([{ ...messageData, _id: forwardedId }], { session });
             const updated = await Conversation.updateOne({ _id: conversationId, isActive: true },
                 { $set: { lastMessage: forwardedId, lastMessageAt: forwardedMessage.createdAt } }, { session });

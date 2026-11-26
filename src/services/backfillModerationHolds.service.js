@@ -13,7 +13,7 @@ const validDate = (value) => value instanceof Date && Number.isFinite(value.getT
 
 // A page stops at its first failed case. Resume using nextCursor; that case
 // will be retried. Existing holds, including releases and retention, are untouched.
-const backfillModerationHolds = async ({ caseType, cursor, limit = 100, dryRun = true } = {}) => {
+const backfillModerationHolds = async ({ caseType, cursor, limit = 100, dryRun = true, transactionGuard } = {}) => {
     const source = sources[caseType];
     if (!source || typeof dryRun !== "boolean" || !Number.isSafeInteger(limit) || limit < 1 || limit > 500 ||
         (cursor != null && (typeof cursor !== "string" || !/^[0-9a-f]{24}$/i.test(cursor)))) {
@@ -38,6 +38,9 @@ const backfillModerationHolds = async ({ caseType, cursor, limit = 100, dryRun =
         const video = await videoQuery.lean();
         const unchanged = video && !video.isDeleted && validDate(record.createdAt) && validDate(video.updatedAt) && video.updatedAt < record.createdAt;
         const counts = { active: 0, unresolved: 0, existing: 0 };
+        if (session && transactionGuard) await transactionGuard(session);
+        if (session && !transactionGuard && await mongoose.connection.db.collection("_migration_locks").findOne({ _id: "expiration_indexes" }, { session })) throw new Error("Coordinated migration or backfill is active");
+        if (session && !transactionGuard && await mongoose.connection.db.collection("_media_index_migration").findOne({ _id: "expiration_indexes", status: { $ne: "complete" } }, { session })) throw new Error("Unresolved index migration blocks backfill");
         if (session) await fenceMediaCoverage({ session });
         for (const slot of ["video", "thumbnail"]) {
             const id = `${caseType}:${record._id}:${slot}`;

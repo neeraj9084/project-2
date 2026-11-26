@@ -3,10 +3,13 @@
 ## Status and authorization
 
 Production execution is **not supported or approved** by the current tools. The
-TTL script explicitly rejects production and remote databases. Coverage approval,
+TTL script and guarded backfill CLI explicitly reject production and remote databases. Coverage approval,
 media deletion, workers and schedulers remain disabled. The backfill functions
 have no production-target safety wrapper or resumable production CLI; do not
 run them against production until those controls are implemented and reviewed.
+The checkpointed runner is isolated-test preparation only. Its test marker
+simulates operator, backup and maintenance evidence; it does not verify a real
+backup, authorize an operator or enforce production write quiescence.
 
 ## Preflight before any future production plan
 
@@ -73,10 +76,25 @@ $env:TTL_MIGRATION_URI = 'mongodb://127.0.0.1:27018/test_NAME?replicaSet=rs0'
 node scripts/prepareExpirationIndexes.js --db test_NAME
 ```
 
-Backfill APIs are `backfillMediaReferences({source, cursor, limit, dryRun:true})`
-and `backfillModerationHolds({caseType, cursor, limit, dryRun:true})`. There is
-currently no standalone guarded production or dry-run CLI for them. The test
-harness executes synthetic pages and demonstrates cursor resumption.
+For a harness-created `test_codex_<24 hex digits>` database, set
+`TEST_MONGODB_URI` to its exact local URI and `TEST_RUN_OWNER_TOKEN` to its
+private `_test_run_owner` token. This reads one bounded page; pass
+`--cursor <cursor>` to inspect another:
+
+```powershell
+node scripts/runGuardedMediaBackfill.js --source messages --run-id test_run --limit 10
+```
+
+Synthetic execution additionally requires a matching test-only
+`_backfill_preflight` marker containing the database name, owner token, operator,
+backup evidence and maintenance ID, with `authorized` and `maintenanceActive`
+true. Set `TEST_BACKFILL_OPERATOR`, `TEST_BACKFILL_BACKUP_EVIDENCE` and
+`TEST_BACKFILL_MAINTENANCE_ID` to those test values, then add `--execute`.
+Save the returned token privately as `TEST_BACKFILL_TOKEN` and repeat until
+status is `complete`; the server checkpoint supplies the cursor. Sources are
+`users`, `pendingUsers`, `videos`, `moments`, `messages`, `conversations`,
+`notifications`, `moderationReports` and `moderationCopyright`. These markers
+and commands do not establish production authorization or backup quality.
 
 ## Failure and review
 
@@ -88,7 +106,12 @@ ensure its DDL has finished; lease expiry alone is insufficient. Inspect current
 indexes and the durable migration token, then use the script's explicit
 `--recover`, `--expected-token` and `--confirm-previous-owner-stopped` options
 with the existing local-test execution flags. Previous approval is not restored.
-There is no equivalent approved production recovery procedure. Restore from the
+For a failed or expired test backfill, inspect the checkpoint and lock, stop the
+previous owner and confirm its work has stopped. Set `TEST_BACKFILL_TOKEN` to
+the checkpoint's previous token and repeat the command with `--execute`,
+`--recover` and `--confirm-previous-owner-stopped`. Lease expiry alone does not prove
+the prior owner stopped. Failed or interrupted runs remain locked pending
+reviewed recovery. There is no equivalent approved production recovery procedure. Restore from the
 verified backup only under an independently authorized incident plan; dropping an
 index cannot recover records already removed by TTL.
 

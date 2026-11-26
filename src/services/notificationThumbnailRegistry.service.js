@@ -6,12 +6,13 @@ import { registerAssetReference, removeAssetReference } from "./cloudinaryAssetR
 import { queueVideoMedia } from "./videoAssetRegistry.service.js";
 
 // Only copy a thumbnail if its current source supplies a complete verified identity.
-const createThumbnailNotifications = async (items) => {
+const createThumbnailNotifications = async (items, { session: existingSession } = {}) => {
     const batch = Array.isArray(items) ? items : [items];
-    const session = await mongoose.startSession();
+    if (existingSession && !existingSession.inTransaction()) throw new Error("An active transaction is required");
+    const session = existingSession || await mongoose.startSession();
     try {
         let created;
-        await session.withTransaction(async () => {
+        const create = async () => {
             const prepared = [];
             for (const item of batch) {
                 const notification = { ...item, _id: new mongoose.Types.ObjectId(), data: { ...item.data } };
@@ -34,9 +35,10 @@ const createThumbnailNotifications = async (items) => {
                 prepared.push(notification);
             }
             created = await Notification.insertMany(prepared, { session });
-        });
+        };
+        if (existingSession) await create(); else await session.withTransaction(create);
         return Array.isArray(items) ? created : created[0];
-    } finally { await session.endSession(); }
+    } finally { if (!existingSession) await session.endSession(); }
 };
 
 const removeNotificationThumbnails = async (notifications, { session } = {}) => {

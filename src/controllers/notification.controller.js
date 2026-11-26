@@ -8,6 +8,10 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { removeNotificationThumbnails } from "../services/notificationThumbnailRegistry.service.js";
 
 const visibleNotificationFilter = (now) => ({ $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] });
+const moderationVisibilityFilter = (user) => user?.role === "admin" ? {} : {
+    adminOnly: { $ne: true },
+    "data.action": { $nin: ["user_report_created", "video_report_created", "copyright_claim_created"] },
+};
 
 //====================== getMyNotifications ============================//
 
@@ -77,6 +81,7 @@ const getMyNotifications = asyncHandler(async (req, res) => {
     const filter = {
         recipient: userId,
         ...visibleNotificationFilter(new Date()),
+        ...moderationVisibilityFilter(req.user),
     };
 
     if (rawIsRead !== undefined) {
@@ -118,6 +123,7 @@ const getMyNotifications = asyncHandler(async (req, res) => {
                 recipient: userId,
                 isRead: false,
                 ...visibleNotificationFilter(new Date()),
+                ...moderationVisibilityFilter(req.user),
             }),
         ]);
 
@@ -219,6 +225,7 @@ const getUnreadNotifications = asyncHandler(async (req, res) => {
         recipient: userId,
         isRead: false,
         ...visibleNotificationFilter(new Date()),
+        ...moderationVisibilityFilter(req.user),
     };
 
     const skip = (page - 1) * limit;
@@ -278,6 +285,7 @@ const getUnreadNotificationCount = asyncHandler(async (req, res) => {
         recipient: userId,
         isRead: false,
         ...visibleNotificationFilter(new Date()),
+        ...moderationVisibilityFilter(req.user),
     });
 
     return res.status(200).json(
@@ -321,6 +329,7 @@ const markNotificationAsRead = asyncHandler(async (req, res) => {
             recipient: userId,
             isRead: false,
             ...visibleNotificationFilter(new Date()),
+            ...moderationVisibilityFilter(req.user),
         },
         {
             $set: {
@@ -368,6 +377,7 @@ const markAllNotificationsAsRead = asyncHandler(async (req, res) => {
             recipient: userId,
             isRead: false,
             ...visibleNotificationFilter(new Date()),
+            ...moderationVisibilityFilter(req.user),
         },
         {
             $set: {
@@ -416,7 +426,7 @@ const deleteNotification = asyncHandler(async (req, res) => {
     const session = await mongoose.startSession();
     try {
         await session.withTransaction(async () => {
-            notification = await Notification.findOne({ _id: notificationId, recipient: userId })
+            notification = await Notification.findOne({ _id: notificationId, recipient: userId, ...moderationVisibilityFilter(req.user) })
                 .select("+mediaRegistry").session(session).lean();
             if (!notification) throw new ApiError(404, "Notification not found");
             await removeNotificationThumbnails([notification], { session });

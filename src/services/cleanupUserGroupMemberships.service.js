@@ -80,7 +80,10 @@ const cleanupUserGroupMemberships = async (userId, { session } = {}) => {
             }
         }
 
-        group.participants = group.participants.filter((participant) => !participant.equals(user._id));
+        const activeOthers = await ConversationMember.find({ conversation: group._id, user: { $ne: user._id }, isActive: true }).select("user").session(session).lean();
+        const ids = activeOthers.map((member) => String(member.user));
+        if (new Set(ids).size !== ids.length) throw new Error("Duplicate group memberships require review");
+        group.participants = activeOthers.map((member) => member.user);
         await group.save({ session });
     }
 

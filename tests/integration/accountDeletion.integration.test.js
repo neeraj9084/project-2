@@ -2,6 +2,9 @@ import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import mongoose from "mongoose";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { openTestDatabase, closeTestDatabase } from "./testDatabase.js";
 
 const available = Boolean(process.env.TEST_MONGODB_URI);
@@ -17,6 +20,45 @@ const seedUser = async (overrides = {}) => {
         fullName: "Test User", isActive: false, isVerified: true, role: "user", deletionRequestedAt: new Date(), ...overrides });
     return userId;
 };
+
+dbtest("video publish compresses locally and tracks uploads and failure rollback", async () => {
+    process.env.ACCESS_TOKEN_SECRET = "isolated-integration-only-secret";
+    const { default: jwt } = await import("jsonwebtoken"); const { default: app } = await import("../../src/app.js");
+    const { v2: cloudinary } = await import("cloudinary"); const { Video } = await import("../../src/models/video.model.js");
+    const oldUpload = cloudinary.uploader.upload, oldName = cloudinary.config().cloud_name, originalCreate = Video.create;
+    const fixture = path.resolve("public/temp", `test-video-${crypto.randomUUID()}.mp4`);
+    const user = await seedUser({ isActive: true, deletionRequestedAt: null, anonymizedAt: null });
+    const token = jwt.sign({ _id: String(user) }, process.env.ACCESS_TOKEN_SECRET);
+    cloudinary.config({ cloud_name: "isolated-test.invalid" });
+    let calls = 0, failUpload = false;
+    cloudinary.uploader.upload = async (file, opts) => { calls++; if (failUpload && calls % 2 === 0) throw new Error("synthetic upload failure");
+        const video = file.endsWith(".mp4"); return { public_id: opts.public_id, resource_type: video ? "video" : "image",
+            type: "upload", secure_url: `https://synthetic.invalid/${opts.public_id}`, duration: 1 }; };
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
+    try {
+        execFileSync("ffmpeg", ["-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=32x32:r=1", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", fixture], { stdio: "pipe" });
+        const validVideo = fs.readFileSync(fixture);
+        const makeForm = (video) => { const form = new FormData(); form.set("title", "Test video"); form.set("description", "Test description");
+            form.set("videoFile", new Blob([video], { type: "video/mp4" }), "test.mp4");
+            form.set("thumbnail", new Blob(["test image"], { type: "image/png" }), "test.png"); return form; };
+        const endpoint = `http://127.0.0.1:${server.address().port}/api/v1/videos/publish`;
+        const request = (video) => fetch(endpoint, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: makeForm(video) });
+        const success = await request(validVideo); assert.equal(success.status, 201);
+        const videoId = new mongoose.Types.ObjectId((await success.json()).data._id); const db = mongoose.connection.db;
+        assert.equal(await db.collection("mediauploadintents").countDocuments({ sourceId: videoId, status: "referenced" }), 2);
+        assert.equal(await db.collection("cloudinaryassetreferences").countDocuments({ sourceId: videoId }), 2);
+        const beforeBad = calls; const bad = await request(Buffer.from("not a video")); assert.equal(bad.status, 500); assert.equal(calls, beforeBad);
+        calls = 0; failUpload = true; const failure = await request(validVideo); assert.equal(failure.status, 500);
+        assert.ok(await db.collection("mediauploadintents").countDocuments({ user, status: "uncertain" }));
+        calls = 0; failUpload = false; Video.create = async () => { throw new Error("injected video transaction failure"); };
+        try { assert.equal((await request(validVideo)).status, 500); } finally { Video.create = originalCreate; }
+        assert.equal(await db.collection("videos").countDocuments({ owner: user }), 1);
+        assert.ok((await db.collection("mediauploadintents").countDocuments({ user, status: "uploaded" })) >= 2);
+    } finally { Video.create = originalCreate; cloudinary.uploader.upload = oldUpload; cloudinary.config({ cloud_name: oldName });
+        if (fs.existsSync(fixture)) fs.unlinkSync(fixture);
+        await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
+});
 
 dbtest("pending expiration retains legacy media and leaves shared references untouched", async () => {
     const { expirePendingUser } = await import("../../src/services/expirePendingUser.service.js");
@@ -138,7 +180,8 @@ dbtest("profile avatar and cover endpoints register mocked uploads and reject an
         assert.equal(groupResponse.status, 201);
         const groupId = (await groupResponse.json()).data._id;
         assert.equal(await db.collection("cloudinaryassetreferences").countDocuments({ sourceId: new mongoose.Types.ObjectId(groupId), asset: user.mediaRegistry.avatar.asset }), 1);
-        const messageForm = makeForm("media"); messageForm.set("type", "image");
+        const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO7sAAAAASUVORK5CYII=", "base64");
+        const messageForm = new FormData(); messageForm.set("media", new Blob([png], { type: "image/png" }), "test.png"); messageForm.set("type", "image");
         const sentResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/v1/messages/${groupId}`, { method: "POST", headers, body: messageForm });
         assert.equal(sentResponse.status, 201);
         const messageId = (await sentResponse.json()).data._id;
@@ -146,7 +189,6 @@ dbtest("profile avatar and cover endpoints register mocked uploads and reject an
         assert.equal(forwarded.status, 201);
         const message = await db.collection("messages").findOne({ _id: new mongoose.Types.ObjectId(messageId) });
         assert.equal(await db.collection("cloudinaryassetreferences").countDocuments({ asset: message.attachment.mediaRegistry.asset, sourceType: "attachment" }), 2);
-        const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO7sAAAAASUVORK5CYII=", "base64");
         const momentForm = new FormData(); momentForm.set("media", new Blob([png], { type: "image/png" }), "moment.png");
         const moment = await fetch(`http://127.0.0.1:${server.address().port}/api/v1/moments`, { method: "POST", headers, body: momentForm });
         assert.equal(moment.status, 201);
@@ -314,6 +356,18 @@ dbtest("database transaction abort rolls back anonymization", async () => {
     assert.equal(user.anonymizedAt, undefined);
 });
 
+dbtest("database cleanup rejects callers without the harness ownership token", async () => {
+    const { cleanupAccount } = await import("../../src/services/cleanupAccount.service.js");
+    const userId = await seedUser();
+    await assert.rejects(cleanupAccount(userId), /Isolated test database required/);
+    const previousEnv = process.env.NODE_ENV;
+    try { process.env.NODE_ENV = "production"; await assert.rejects(cleanupAccount(userId, { ownerToken: owned.ownerToken }), /Isolated test database required/); }
+    finally { process.env.NODE_ENV = previousEnv; }
+    const user = await mongoose.connection.db.collection("users").findOne({ _id: userId });
+    assert.equal(user.anonymizedAt, undefined);
+    assert.notEqual(user.databaseCleanupStatus, "complete");
+});
+
 dbtest("group ownership transfers to an active admin", async () => {
     const { cleanupUserGroupMemberships } = await import("../../src/services/cleanupUserGroupMemberships.service.js");
     const former = await seedUser({ anonymizedAt: new Date() });
@@ -415,7 +469,7 @@ dbtest("cleanup coordinator rolls back earlier work on a later failure", async (
     const before = await mongoose.connection.db.collection("users").findOne({ _id: userId });
     const originalFind = Video.find;
     Video.find = () => { throw new Error("injected coordinator failure"); };
-    try { await assert.rejects(cleanupAccount(userId), /injected coordinator failure/); }
+    try { await assert.rejects(cleanupAccount(userId, { ownerToken: owned.ownerToken }), /injected coordinator failure/); }
     finally { Video.find = originalFind; }
     const after = await mongoose.connection.db.collection("users").findOne({ _id: userId });
     assert.equal(after.username, before.username);

@@ -125,10 +125,11 @@ const publishAVideo = asyncHandler(async (req, res) => {
 
         //================ COMPRESS VIDEO =================//
 
-        await compressVideo(
+        const compressed = await compressVideo(
             videoFilePath,
             compressedVideoPath
         );
+        if (!compressed) throw new ApiError(500, "Video compression failed");
 
         //================ UPLOAD VIDEO =================//
 

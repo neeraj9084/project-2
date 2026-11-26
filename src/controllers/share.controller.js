@@ -334,7 +334,7 @@ const shareVideoToChat = asyncHandler(async (req, res) => {
             await registerAssetReference({ assetId: metadata.asset, sourceType: "attachment", sourceId: messageId,
                 userId: req.user._id, session });
             [message] = await Message.create([{ _id: messageId, conversation: conversation._id,
-                sender: req.user._id, type: "video", content: content.trim(), attachment }], { session });
+                sender: req.user._id, type: "video", content: content.trim(), attachment, attachments: [attachment] }], { session });
             [share] = await Share.create([{ owner: req.user._id, video: video._id, shareType: "chat",
                 conversation: conversation._id }], { session });
             const updated = await Conversation.updateOne({ _id: conversation._id, isActive: true },

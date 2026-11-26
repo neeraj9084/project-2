@@ -84,7 +84,7 @@ const runIsolatedAccountDeletion = async ({ userId, ownerToken, adapter, approva
     if (!claimed) return { state: "blocked", reason: "unavailable_or_claimed", testOnly: true, permanentDeletionComplete: false };
 
     try {
-        await cleanupAccount(userId);
+        await cleanupAccount(userId, { ownerToken });
         // Only the account's sole synthetic job may be sent to the mock worker.
         if (adapter && approvalId) {
             const jobs = await MediaCleanupRecord.find({ status: "pending" }).select("user cloudName publicId").lean();

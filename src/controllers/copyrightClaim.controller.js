@@ -8,6 +8,8 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { Notification } from "../models/notification.model.js";
 import { createVideoModerationHolds } from "../services/assetModerationHold.service.js";
+import { activeModerationAdmins } from "../services/moderationNotification.service.js";
+import { User } from "../models/user.model.js";
 
 //=========================== submitCopyrightClaim ===========================
 
@@ -95,6 +97,9 @@ const submitCopyrightClaim = asyncHandler(async (req, res) => {
     try {
         const session = await mongoose.startSession();
         try { await session.withTransaction(async () => {
+        const claimant = await User.updateOne({ _id: claimantId, isActive: true, deletionRequestedAt: null, anonymizedAt: null }, { $inc: { moderationNotificationFence: 1 } }, { session, timestamps: false });
+        if (claimant.matchedCount !== 1) throw new ApiError(403, "Account unavailable");
+        if (await CopyrightClaim.exists({ claimant: claimantId, video: videoId, status: { $in: ["pending", "approved"] } }).session(session)) throw new ApiError(409, "You already have an active copyright claim for this video");
         [claim] = await CopyrightClaim.create([{
             claimant: claimantId,
             video: videoId,
@@ -102,6 +107,17 @@ const submitCopyrightClaim = asyncHandler(async (req, res) => {
             description: trimmedDescription,
         }], { session });
         await createVideoModerationHolds({ caseType: "copyright", caseId: claim._id, videoId, actor: claimantId, session });
+        const notifications = [];
+        if (await User.exists({ _id: video.owner, isActive: true, deletionRequestedAt: null, anonymizedAt: null }).session(session)) notifications.push({
+            recipient: video.owner, actor: claimantId, type: "system", title: "New Copyright Claim",
+            message: `A copyright claim has been submitted against your video "${video.title}".`, entityType: "video", entityId: video._id,
+            data: { claimId: claim._id, videoId: video._id, videoTitle: video.title, claimantId, reason: claim.reason, status: claim.status, action: "copyright_claim_submitted" }
+        });
+        const admins = await activeModerationAdmins({ session });
+        for (const admin of admins) if (!admin._id.equals(video.owner)) notifications.push({ recipient: admin._id, adminOnly: true, actor: claimantId, type: "report_update",
+            title: "New Copyright Claim", message: `A copyright claim was submitted for "${video.title}".`, entityType: "report", entityId: claim._id,
+            data: { claimId: claim._id, videoId: video._id, status: claim.status, action: "copyright_claim_created" } });
+        if (notifications.length) await Notification.insertMany(notifications, { session });
         }); } finally { await session.endSession(); }
     } catch (error) {
 
@@ -116,32 +132,6 @@ const submitCopyrightClaim = asyncHandler(async (req, res) => {
     }
 
     // 🔔 Notify video owner
-    try {
-        await Notification.create({
-            recipient: video.owner,
-            actor: claimantId,
-            type: "system",
-            title: "New Copyright Claim",
-            message: `A copyright claim has been submitted against your video "${video.title}".`,
-            entityType: "video",
-            entityId: video._id,
-            data: {
-                claimId: claim._id,
-                videoId: video._id,
-                videoTitle: video.title,
-                claimantId,
-                reason: claim.reason,
-                status: claim.status,
-                action: "copyright_claim_submitted"
-            }
-        });
-    } catch (error) {
-        console.error(
-            "Failed to create copyright claim notification:",
-            error.message
-        );
-    }
-
     return res.status(201).json(
         new ApiResponse(
             201,

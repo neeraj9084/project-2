@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 import { BlockedUser } from "../models/blockedUser.model.js";
 import { User } from "../models/user.model.js";
+import { Conversation } from "../models/conversation.model.js";
 
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
@@ -35,11 +36,17 @@ const blockUser = asyncHandler(async (req, res) => {
     }
 
     let block;
+    const session = await mongoose.startSession();
 
     try {
-        block = await BlockedUser.create({
+        await session.withTransaction(async () => {
+        [block] = await BlockedUser.create([{
             blocker: blockerId,
             blockedUser: targetUser._id
+        }], { session });
+        // Message commits write the same direct conversation document.
+        await Conversation.updateMany({ type: "direct", isActive: true, participants: { $all: [blockerId, targetUser._id] } },
+            { $inc: { membershipVersion: 1 } }, { session });
         });
     } catch (error) {
         if (error?.code === 11000) {
@@ -47,7 +54,7 @@ const blockUser = asyncHandler(async (req, res) => {
         }
 
         throw error;
-    }
+    } finally { await session.endSession(); }
 
     return res.status(201).json(
         new ApiResponse(

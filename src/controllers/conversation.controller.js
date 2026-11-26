@@ -162,14 +162,19 @@ const getUserConversation = asyncHandler(async(req, res) => {
 
    const skip = (page - 1) * limit;
 
+   const archived = req.query.archived === "true";
+
    const memberships = await ConversationMember.find({
-    user: userId, isActive: true, isHidden: { $ne: true }
+    user: userId, isActive: true, isHidden: { $ne: true }, isArchived: archived ? true : { $ne: true }
    }).select("conversation").lean();
    const filter = {
-    participants: userId,
     isActive: true,
     $or: [
-        { type: "direct", directReadStatus: { $not: { $elemMatch: { user: userId, isHidden: true } } } },
+        { type: "direct", participants: userId, $and: [
+            { directReadStatus: { $not: { $elemMatch: { user: userId, isHidden: true } } } },
+            archived ? { directReadStatus: { $elemMatch: { user: userId, isArchived: true } } }
+                : { directReadStatus: { $not: { $elemMatch: { user: userId, isArchived: true } } } }
+        ] },
         { type: "group", _id: { $in: memberships.map((member) => member.conversation) } }
     ]
    };
@@ -233,7 +238,6 @@ const getConversationById = asyncHandler(async (req, res) => {
 
     const conversation = await Conversation.findOne({
         _id: conversationId,
-        participants: userId,
         isActive: true
     })
         .populate(
@@ -250,6 +254,7 @@ const getConversationById = asyncHandler(async (req, res) => {
     }
 
     if (conversation.type === "direct") {
+        if (!conversation.participants.some((participant) => participant._id.toString() === userId.toString())) throw new ApiError(404, "Conversation not found");
         const otherParticipant = conversation.participants.find(
             (participant) =>
                 participant._id.toString() !== userId.toString()
@@ -268,7 +273,9 @@ const getConversationById = asyncHandler(async (req, res) => {
                 );
             }
         }
-    }
+    } else if (conversation.type === "group") {
+        if (!await ConversationMember.exists({ conversation: conversationId, user: userId, isActive: true })) throw new ApiError(404, "Conversation not found");
+    } else throw new ApiError(404, "Conversation not found");
 
     return res.status(200).json(
         new ApiResponse(
@@ -368,7 +375,6 @@ const deleteConversation = asyncHandler(async (req, res) => {
 
     const conversation = await Conversation.findOne({
         _id: conversationId,
-        participants: currentUserId,
         isActive: true
     }); 
 
@@ -378,6 +384,7 @@ const deleteConversation = asyncHandler(async (req, res) => {
 
     let responseMessage = "Conversation hidden successfully";
     if (conversation.type === "direct") {
+        if (!conversation.participants.some((participant) => participant.equals(currentUserId))) throw new ApiError(404, "Conversation not found");
         const now = new Date();
         const status = conversation.directReadStatus.find(
             (item) => item.user.toString() === currentUserId.toString()
@@ -415,14 +422,14 @@ const deleteConversation = asyncHandler(async (req, res) => {
                     }
                     const deleted = await Conversation.findOneAndDelete({
                         _id: conversationId, type: "group", createdBy: currentUserId,
-                        participants: currentUserId, isActive: true
+                        isActive: true
                     }).select("+mediaRegistry").session(session);
                     if (!deleted) throw new ApiError(404, "Conversation not found");
 
                     await retireGroupAvatar(deleted, { session });
 
                     const messages = await Message.find({ conversation: conversationId })
-                        .select("_id sender attachment.url attachment.publicId attachment.resourceType attachment.deliveryType +attachment.mediaRegistry").session(session).lean();
+                        .select("_id sender attachment.url attachment.publicId attachment.resourceType attachment.deliveryType attachments.url attachments.publicId attachments.resourceType attachments.deliveryType +attachment.mediaRegistry +attachments.mediaRegistry").session(session).lean();
                     for (const message of messages) await retireMessageAttachment(message, { session });
                     const messageIds = messages.map((message) => message._id);
                     await MessageReaction.deleteMany({ message: { $in: messageIds } }, { session });

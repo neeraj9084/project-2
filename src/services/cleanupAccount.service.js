@@ -7,14 +7,18 @@ import { cleanupUserInteractions } from "./cleanupUserInteractions.service.js";
 import { cleanupUserGroupMemberships } from "./cleanupUserGroupMemberships.service.js";
 import { tombstoneVideo } from "./tombstoneVideo.service.js";
 import { cleanupUserPersonalRecords } from "./cleanupUserPersonalRecords.service.js";
+import { assertIsolatedMediaTest } from "./testMediaCoverageApproval.service.js";
 
-const cleanupAccount = async (userId) => {
+// Until production activation is reviewed, destructive database cleanup is
+// restricted to the same harness-owned local database as lifecycle execution.
+const cleanupAccount = async (userId, { ownerToken } = {}) => {
     if (!mongoose.isValidObjectId(userId)) throw new Error("Invalid user ID");
 
     const session = await mongoose.startSession();
     try {
         let result;
         await session.withTransaction(async () => {
+            await assertIsolatedMediaTest({ session, ownerToken });
             // Writing the same user document serializes concurrent cleanup transactions.
             const user = await User.findOneAndUpdate(
                 { _id: userId, isActive: false, deletionRequestedAt: { $ne: null },

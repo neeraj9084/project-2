@@ -65,6 +65,7 @@ const notificationSchema = new mongoose.Schema(
             default: {},
         },
 
+        adminOnly: { type: Boolean, default: false, select: false },
         mediaRegistry: { type: mediaRegistrySchema, default: undefined, select: false },
 
         isRead: {

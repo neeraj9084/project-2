@@ -16,6 +16,13 @@ import { isBlockedBetweenUsers } from "../utils/isBlockedBetweenUsers.js";
 
 import { Notification } from "../models/notification.model.js";
 import { registerGroupAvatar } from "../services/groupAvatarRegistry.service.js";
+import { mutateGroupMembership, fenceGroupParticipants } from "../services/groupMembership.service.js";
+
+const notifyMembershipChange = async (req, title, message, action, extra = {}) => {
+    try { await Notification.create({ recipient: req.body.userId, actor: req.user._id, type: "system", title, message,
+        entityType: "user", entityId: req.body.userId, data: { conversationId: req.params.conversationId, action, ...extra } }); }
+    catch (error) { console.error("Failed to create membership notification:", error.message); }
+};
 
 //===================== createMemberConversation =======================//
 
@@ -93,6 +100,7 @@ const createMemberConversation = asyncHandler(async (req, res) => {
     const session = await mongoose.startSession();
     try {
         await session.withTransaction(async () => {
+    await fenceGroupParticipants(uniqueParticipantIds, { session });
     const avatarUrl = avatar?.trim() || null;
     const avatarMetadata = await registerGroupAvatar({ url: avatarUrl, conversationId, userId: currentUserId, session });
     [conversation] = await Conversation.create([{
@@ -132,557 +140,37 @@ const createMemberConversation = asyncHandler(async (req, res) => {
 //====================== AddConversationMember ======================//
 
 const addConversationMember = asyncHandler(async (req, res) => {
-
-    const { conversationId } = req.params;
-    const { userId } = req.body;
-
-    const currentUserId = req.user?._id;
-
-    if (!currentUserId) {
-        throw new ApiError(401, "Unauthorized request");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(conversationId)) {
-        throw new ApiError(400, "Invalid conversation ID");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-        throw new ApiError(400, "Invalid user ID");
-    }
-
-    if (currentUserId.toString() === userId.toString()) {
-        throw new ApiError(400, "You cannot add yourself");
-    }
-
-    const conversation = await Conversation.findOne({
-        _id: conversationId,
-        isActive: true
-    });
-
-    if (!conversation) {
-        throw new ApiError(404, "Conversation not found");
-    }
-
-    const currentUserMember = await ConversationMember.findOne({
-        conversation: conversationId,
-        user: currentUserId,
-        isActive: true
-    });
-
-    if (!currentUserMember || currentUserMember.role !== "admin") {
-        throw new ApiError(
-            403,
-            "You are not authorized to add members to this conversation"
-        );
-    }
-
-    const user = await User.findOne({
-        _id: userId,
-        isActive: true
-    }).select("_id username");
-
-    if (!user) {
-        throw new ApiError(404, "User not found or inactive");
-    }
-
-    const blocked = await isBlockedBetweenUsers(
-        currentUserId,
-        userId
-    );
-
-    if (blocked) {
-        throw new ApiError(
-            403,
-            "You cannot add a blocked user to this conversation"
-        );
-    }
-
-    const existingMember = await ConversationMember.findOne({
-        conversation: conversationId,
-        user: userId
-    });
-
-    if (existingMember) {
-
-        if (existingMember.isActive) {
-            throw new ApiError(
-                409,
-                "User is already a member of this conversation"
-            );
-        }
-
-        existingMember.isActive = true;
-        existingMember.joinedAt = new Date();
-        existingMember.role = "member";
-
-        await existingMember.save();
-
-        if (
-            !conversation.participants.some(
-                (participantId) =>
-                    participantId.toString() === userId.toString()
-            )
-        ) {
-            conversation.participants.push(userId);
-            await conversation.save();
-        }
-
-        // 🔔 Notification - Member added again
-        try {
-            await Notification.create({
-                recipient: userId,
-                actor: currentUserId,
-                type: "system",
-                title: "Added to Group",
-                message: `You have been added to the group "${conversation.name}".`,
-                entityType: "user",
-                entityId: userId,
-                data: {
-                    conversationId: conversation._id,
-                    conversationName: conversation.name,
-                    addedBy: currentUserId,
-                    action: "group_member_added"
-                }
-            });
-        } catch (error) {
-            console.error(
-                "Failed to create member add notification:",
-                error.message
-            );
-        }
-
-        return res.status(200).json(
-            new ApiResponse(
-                200,
-                existingMember,
-                "Member added successfully"
-            )
-        );
-    }
-
-    const member = await ConversationMember.create({
-        conversation: conversationId,
-        user: userId,
-        role: "member"
-    });
-
-    if (
-        !conversation.participants.some(
-            (participantId) =>
-                participantId.toString() === userId.toString()
-        )
-    ) {
-        conversation.participants.push(userId);
-        await conversation.save();
-    }
-
-    // 🔔 Notification - New member added
-    try {
-        await Notification.create({
-            recipient: userId,
-            actor: currentUserId,
-            type: "system",
-            title: "Added to Group",
-            message: `You have been added to the group "${conversation.name}".`,
-            entityType: "user",
-            entityId: userId,
-            data: {
-                conversationId: conversation._id,
-                conversationName: conversation.name,
-                addedBy: currentUserId,
-                action: "group_member_added"
-            }
-        });
-    } catch (error) {
-        console.error(
-            "Failed to create member add notification:",
-            error.message
-        );
-    }
-
-    return res.status(201).json(
-        new ApiResponse(
-            201,
-            member,
-            "Member added successfully"
-        )
-    );
+    const result = await mutateGroupMembership({ conversationId: req.params.conversationId, actorId: req.user?._id, targetId: req.body.userId, action: "add" });
+    await notifyMembershipChange(req, "Added to Group", `You have been added to the group "${result.groupName}".`, "group_member_added", { conversationName: result.groupName, addedBy: req.user._id });
+    const status = result.reactivated ? 200 : 201;
+    return res.status(status).json(new ApiResponse(status, result.member, "Member added successfully"));
 });
+
 
 
 
 //====================== removeConversationMember ======================//
 
 const removeConversationMember = asyncHandler(async (req, res) => {
-
-    const { conversationId } = req.params;
-    const { userId } = req.body;
-
-    const currentUserId = req.user._id;
-
-    if (!currentUserId) {
-        throw new ApiError(401, "Unauthorized request");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(conversationId)) {
-        throw new ApiError(400, "Invalid conversation ID");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-        throw new ApiError(400, "Invalid user ID");
-    }
-
-    const conversation = await Conversation.findOne({
-        _id: conversationId,
-        isActive: true
-    });
-
-    if (!conversation) {
-        throw new ApiError(404, "Conversation not found");
-    }
-
-    const currentUserMember = await ConversationMember.findOne({
-        conversation: conversationId,
-        user: currentUserId,
-        isActive: true
-    });
-
-    if (!currentUserMember) {
-        throw new ApiError(
-            403,
-            "You are not a member of this conversation"
-        );
-    }
-
-    if (currentUserMember.role !== "admin") {
-        throw new ApiError(
-            403,
-            "Only admins can remove members"
-        );
-    }
-
-    const member = await ConversationMember.findOne({
-        conversation: conversationId,
-        user: userId,
-        isActive: true
-    });
-
-    if (!member) {
-        throw new ApiError(
-            404,
-            "Member not found in this conversation"
-        );
-    }
-
-    member.isActive = false;
-
-    await member.save();
-
-    // 🔔 Notification - Member removed
-    try {
-        await Notification.create({
-            recipient: userId,
-            actor: currentUserId,
-            type: "system",
-            title: "Removed from Group",
-            message: `You have been removed from the group "${conversation.name}".`,
-            entityType: "user",
-            entityId: userId,
-            data: {
-                conversationId: conversation._id,
-                conversationName: conversation.name,
-                removedBy: currentUserId,
-                action: "group_member_removed"
-            }
-        });
-    } catch (error) {
-        console.error(
-            "Failed to create member remove notification:",
-            error.message
-        );
-    }
-
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            {},
-            "Member removed successfully"
-        )
-    );
+    const result = await mutateGroupMembership({ conversationId: req.params.conversationId, actorId: req.user?._id, targetId: req.body.userId, action: "remove" });
+    await notifyMembershipChange(req, "Removed from Group", `You have been removed from the group "${result.groupName}".`, "group_member_removed", { conversationName: result.groupName, removedBy: req.user._id });
+    return res.status(200).json(new ApiResponse(200, {}, "Member removed successfully"));
 });
+
 
 
 
 //===================== leaveConversation ==================================//
 
 const leaveConversation = asyncHandler(async (req, res) => {
-
-    const { conversationId } = req.params;
-    const currentUserId = req.user?._id;
-
-    if (!currentUserId) {
-        throw new ApiError(401, "Unauthorized request");
+    const result = await mutateGroupMembership({ conversationId: req.params.conversationId, actorId: req.user?._id, action: "leave" });
+    if (result.promotedUser) {
+        try { await Notification.create({ recipient: result.promotedUser, actor: req.user._id, type: "system", title: "You Are Now a Group Admin", message: `You are now an admin of the group "${result.groupName}".`, entityType: "user", entityId: result.promotedUser, data: { conversationId: req.params.conversationId, conversationName: result.groupName, action: "group_admin_promoted" } }); }
+        catch (error) { console.error("Failed to create admin promotion notification:", error.message); }
     }
-
-    if (!mongoose.Types.ObjectId.isValid(conversationId)) {
-        throw new ApiError(400, "Invalid conversation ID");
-    }
-
-    const session = await mongoose.startSession();
-
-    let responseMessage = "You left the conversation successfully";
-
-    try {
-
-        await session.withTransaction(async () => {
-
-            // 1. Find active conversation
-            const conversation = await Conversation.findOne({
-                _id: conversationId,
-                isActive: true
-            }).session(session);
-
-            if (!conversation) {
-                throw new ApiError(404, "Conversation not found");
-            }
-
-            // 2. Leave is only allowed for group conversations
-            if (conversation.type !== "group") {
-                throw new ApiError(
-                    400,
-                    "Leave is only available for group conversations"
-                );
-            }
-
-            // 3. Get active members
-            const activeMembers = await ConversationMember.find({
-                conversation: conversation._id,
-                isActive: true
-            })
-                .select("_id user role joinedAt")
-                .sort({ joinedAt: 1, _id: 1 })
-                .session(session);
-
-            if (activeMembers.length === 0) {
-                throw new ApiError(
-                    500,
-                    "Conversation has no active members"
-                );
-            }
-
-            const membersByUser = new Map();
-            const duplicateMembershipIds = [];
-
-            for (const member of activeMembers) {
-
-                const userId = member.user.toString();
-
-                if (!["member", "admin"].includes(member.role)) {
-                    throw new ApiError(
-                        500,
-                        `Invalid conversation member role for user ${userId}`
-                    );
-                }
-
-                if (!membersByUser.has(userId)) {
-
-                    membersByUser.set(userId, {
-                        user: member.user,
-                        role: member.role,
-                        memberId: member._id,
-                        joinedAt: member.joinedAt
-                    });
-
-                    continue;
-                }
-
-                const existingMember = membersByUser.get(userId);
-
-                if (existingMember.role !== member.role) {
-                    throw new ApiError(
-                        500,
-                        `Inconsistent membership roles found for user ${userId}`
-                    );
-                }
-
-                duplicateMembershipIds.push(member._id);
-            }
-
-            const uniqueMembers = Array.from(membersByUser.values());
-
-            // 5. Find the current user's canonical membership
-            const currentUserMember = membersByUser.get(
-                currentUserId.toString()
-            );
-
-            if (!currentUserMember) {
-                throw new ApiError(
-                    404,
-                    "You are not an active member of this conversation"
-                );
-            }
-
-            // 6. Clean up old duplicate active membership records
-            if (duplicateMembershipIds.length > 0) {
-
-                await ConversationMember.updateMany(
-                    {
-                        _id: { $in: duplicateMembershipIds },
-                        isActive: true
-                    },
-                    {
-                        $set: {
-                            isActive: false
-                        }
-                    },
-                    {
-                        session
-                    }
-                );
-            }
-
-            // 7. Build remaining unique members
-            const remainingMembers = uniqueMembers.filter(
-                (member) =>
-                    member.user.toString() !== currentUserId.toString()
-            );
-
-            // 8. Last member is leaving
-            if (remainingMembers.length === 0) {
-
-                await ConversationMember.updateMany(
-                    {
-                        conversation: conversation._id,
-                        user: currentUserId,
-                        isActive: true
-                    },
-                    {
-                        $set: {
-                            isActive: false,
-                            leftAt: new Date()
-                        }
-                    },
-                    {
-                        session
-                    }
-                );
-
-                // Keep conversation for history
-                conversation.participants = [];
-                conversation.isActive = false;
-
-                await conversation.save({ session });
-
-                responseMessage =
-                    "You left and the empty conversation was archived";
-
-                return;
-            }
-
-            // 9. If admin is leaving, guarantee another admin exists
-            if (currentUserMember.role === "admin") {
-
-                const remainingAdmins = remainingMembers.filter(
-                    (member) => member.role === "admin"
-                );
-
-                // Current user was the last admin
-                if (remainingAdmins.length === 0) {
-
-                    const newAdmin = remainingMembers[0];
-
-                    const promotedMember =
-                        await ConversationMember.findOneAndUpdate(
-                            {
-                                _id: newAdmin.memberId,
-                                conversation: conversation._id,
-                                isActive: true,
-                                role: "member"
-                            },
-                            {
-                                $set: {
-                                    role: "admin"
-                                }
-                            },
-                            {
-                                new: true,
-                                session
-                            }
-                        );
-
-                    if (!promotedMember) {
-                        throw new ApiError(
-                            500,
-                            "Unable to assign a new conversation admin"
-                        );
-                    }
-
-                    newAdmin.role = "admin";
-
-                    // 🔔 Notification - New admin
-                    try {
-                        await Notification.create({
-                            recipient: newAdmin.user,
-                            actor: currentUserId,
-                            type: "system",
-                            title: "You Are Now a Group Admin",
-                            message: `You are now an admin of the group "${conversation.name}".`,
-                            entityType: "user",
-                            entityId: newAdmin.user,
-                            data: {
-                                conversationId: conversation._id,
-                                conversationName: conversation.name,
-                                action: "group_admin_promoted"
-                            }
-                        });
-                    } catch (error) {
-                        console.error(
-                            "Failed to create admin promotion notification:",
-                            error.message
-                        );
-                    }
-                }
-            }
-
-            // 10. Soft-leave all active memberships of current user
-            await ConversationMember.updateMany(
-                {
-                    conversation: conversation._id,
-                    user: currentUserId,
-                    isActive: true
-                },
-                {
-                    $set: {
-                        isActive: false,
-                        leftAt: new Date()
-                    }
-                },
-                {
-                    session
-                }
-            );
-
-            // 11. Conversation participants come from active memberships
-            conversation.participants = remainingMembers.map(
-                (member) => member.user
-            );
-
-            // 12. Save conversation
-            await conversation.save({ session });
-        });
-
-        return res.status(200).json(
-            new ApiResponse(
-                200,
-                {},
-                responseMessage
-            )
-        );
-
-    } finally {
-        await session.endSession();
-    }
+    return res.status(200).json(new ApiResponse(200, {}, result.archived ? "You left and the empty conversation was archived" : "You left the conversation successfully"));
 });
+
 
 
 
@@ -747,155 +235,12 @@ const getConversationMembers = asyncHandler(async (req, res) => {
 //====================== updateMemberRole ======================//
 
 const updateMemberRole = asyncHandler(async (req, res) => {
-
-    const { conversationId } = req.params;
-    const { userId, role } = req.body;
-    const currentUserId = req.user?._id;
-
-    if (!currentUserId) {
-        throw new ApiError(401, "Unauthorized request");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(conversationId)) {
-        throw new ApiError(400, "Invalid conversation ID");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-        throw new ApiError(400, "Invalid user ID");
-    }
-
-    if (!["admin", "member"].includes(role)) {
-        throw new ApiError(
-            400,
-            "Invalid role. Must be 'admin' or 'member'"
-        );
-    }
-
-    const conversation = await Conversation.findOne({
-        _id: conversationId,
-        isActive: true
-    });
-
-    if (!conversation) {
-        throw new ApiError(404, "Conversation not found");
-    }
-
-    const currentUserMember = await ConversationMember.findOne({
-        conversation: conversationId,
-        user: currentUserId,
-        isActive: true
-    });
-
-    if (!currentUserMember) {
-        throw new ApiError(
-            403,
-            "You are not a member of this conversation"
-        );
-    }
-
-    if (currentUserMember.role !== "admin") {
-        throw new ApiError(
-            403,
-            "Only admins can update member roles"
-        );
-    }
-
-    const targetMember = await ConversationMember.findOne({
-        conversation: conversationId,
-        user: userId,
-        isActive: true
-    }).populate(
-        "user",
-        "username fullName avatar"
-    );
-
-    if (!targetMember) {
-        throw new ApiError(
-            404,
-            "Member not found in this conversation"
-        );
-    }
-
-    if (targetMember.role === role) {
-        return res.status(200).json(
-            new ApiResponse(
-                200,
-                targetMember,
-                "Member role is already set to the specified value"
-            )
-        );
-    }
-
-    // Prevent removing the last admin
-    if (targetMember.role === "admin" && role === "member") {
-
-        const otherAdmin = await ConversationMember.findOne({
-            conversation: conversationId,
-            user: { $ne: userId },
-            role: "admin",
-            isActive: true
-        });
-
-        if (!otherAdmin) {
-            throw new ApiError(
-                400,
-                "Cannot remove the last admin"
-            );
-        }
-    }
-
-    targetMember.role = role;
-
-    await targetMember.save();
-
-    // 🔔 Notification - Role changed
-    try {
-
-        const roleTitle =
-            role === "admin"
-                ? "You Are Now a Group Admin"
-                : "Group Admin Role Removed";
-
-        const roleMessage =
-            role === "admin"
-                ? `You are now an admin of the group "${conversation.name}".`
-                : `Your admin role has been removed from the group "${conversation.name}".`;
-
-        await Notification.create({
-            recipient: userId,
-            actor: currentUserId,
-            type: "system",
-            title: roleTitle,
-            message: roleMessage,
-            entityType: "user",
-            entityId: userId,
-            data: {
-                conversationId: conversation._id,
-                conversationName: conversation.name,
-                changedBy: currentUserId,
-                oldRole: targetMember.role === "admin"
-                    ? "member"
-                    : "admin",
-                newRole: role,
-                action: "group_member_role_changed"
-            }
-        });
-
-    } catch (error) {
-        console.error(
-            "Failed to create role change notification:",
-            error.message
-        );
-    }
-
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            targetMember,
-            "Member role updated successfully"
-        )
-    );
+    const result = await mutateGroupMembership({ conversationId: req.params.conversationId, actorId: req.user?._id, targetId: req.body.userId, role: req.body.role, action: "role" });
+    if (result.oldRole !== req.body.role) await notifyMembershipChange(req, req.body.role === "admin" ? "You Are Now a Group Admin" : "Group Admin Role Removed", req.body.role === "admin" ? `You are now an admin of the group "${result.groupName}".` : `Your admin role has been removed from the group "${result.groupName}".`, "group_member_role_changed", { conversationName: result.groupName, changedBy: req.user._id, oldRole: result.oldRole, newRole: req.body.role });
+    const member = await ConversationMember.findById(result.member._id).populate("user", "username fullName avatar");
+    return res.status(200).json(new ApiResponse(200, member, "Member role updated successfully"));
 });
+
 
 
 
@@ -1081,127 +426,38 @@ const unmuteConversation = asyncHandler(async (req, res) => {
 
 //====================== archiveConversation ======================//
 
+const setConversationArchived = async (conversationId, userId, archived) => {
+    if (!mongoose.isValidObjectId(conversationId) || !mongoose.isValidObjectId(userId)) throw new ApiError(400, "Invalid conversation ID");
+    const session = await mongoose.startSession();
+    try { return await session.withTransaction(async () => {
+        const conversation = await Conversation.findOneAndUpdate({ _id: conversationId, isActive: true }, { $inc: { membershipVersion: 1 } }, { session, returnDocument: "after" });
+        if (!conversation) throw new ApiError(404, "Conversation not found");
+        if (conversation.type === "direct") {
+            if (!conversation.participants.some((participant) => participant.equals(userId))) throw new ApiError(403, "You are not a participant of this conversation");
+            let status = conversation.directReadStatus.find((item) => item.user.equals(userId));
+            if (!status) { conversation.directReadStatus.push({ user: userId, isArchived: archived }); status = conversation.directReadStatus[conversation.directReadStatus.length - 1]; }
+            else status.isArchived = archived;
+            await conversation.save({ session });
+            return status.toObject();
+        }
+        if (conversation.type === "group") {
+            const member = await ConversationMember.findOne({ conversation: conversationId, user: userId, isActive: true }).session(session);
+            if (!member) throw new ApiError(403, "Active membership required");
+            member.isArchived = archived; await member.save({ session }); return member.toObject();
+        }
+        throw new ApiError(400, "Invalid conversation type");
+    }); } finally { await session.endSession(); }
+};
+
 const archiveConversation = asyncHandler(async (req, res) => {
-
-    const { conversationId } = req.params;
-    const currentUserId = req.user?._id;
-
-    if (!currentUserId) {
-        throw new ApiError(401, "Unauthorized request");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(conversationId)) {
-        throw new ApiError(400, "Invalid conversation ID");
-    }
-
-    const conversation = await Conversation.findOne({
-        _id: conversationId,
-        isActive: true
-    });
-
-    if (!conversation) {
-        throw new ApiError(404, "Conversation not found");
-    }
-
-    const conversationMember = await ConversationMember.findOne({
-        conversation: conversationId,
-        user: currentUserId,
-        isActive: true
-    });
-
-    if (!conversationMember) {
-        throw new ApiError(
-            403,
-            "You are not a member of this conversation"
-        );
-    }
-
-    if (conversationMember.isArchived) {
-        return res.status(200).json(
-            new ApiResponse(
-                200,
-                conversationMember,
-                "Conversation is already archived"
-            )
-        );
-    }
-
-    conversationMember.isArchived = true;
-
-    await conversationMember.save();
-
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            conversationMember,
-            "Conversation archived successfully"
-        )
-    );
+    const result = await setConversationArchived(req.params.conversationId, req.user?._id, true);
+    return res.status(200).json(new ApiResponse(200, result, "Conversation archived successfully"));
 });
-
-
-
-//====================== unarchiveConversation ======================//
 
 const unarchiveConversation = asyncHandler(async (req, res) => {
-
-    const { conversationId } = req.params;
-    const currentUserId = req.user?._id;
-
-    if (!currentUserId) {
-        throw new ApiError(401, "Unauthorized request");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(conversationId)) {
-        throw new ApiError(400, "Invalid conversation ID");
-    }
-
-    const conversation = await Conversation.findOne({
-        _id: conversationId,
-        isActive: true
-    });
-
-    if (!conversation) {
-        throw new ApiError(404, "Conversation not found");
-    }
-
-    const conversationMember = await ConversationMember.findOne({
-        conversation: conversationId,
-        user: currentUserId,
-        isActive: true
-    });
-
-    if (!conversationMember) {
-        throw new ApiError(
-            403,
-            "You are not a member of this conversation"
-        );
-    }
-
-    if (!conversationMember.isArchived) {
-        return res.status(200).json(
-            new ApiResponse(
-                200,
-                conversationMember,
-                "Conversation is already unarchived"
-            )
-        );
-    }
-
-    conversationMember.isArchived = false;
-
-    await conversationMember.save();
-
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            conversationMember,
-            "Conversation unarchived successfully"
-        )
-    );
+    const result = await setConversationArchived(req.params.conversationId, req.user?._id, false);
+    return res.status(200).json(new ApiResponse(200, result, "Conversation unarchived successfully"));
 });
-
-
 
 export {
     createMemberConversation,

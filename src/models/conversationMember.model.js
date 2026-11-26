@@ -47,6 +47,8 @@ const conversationMemberSchema = new mongoose.Schema({
         default: false
     },
 
+    isArchived: { type: Boolean, default: false },
+
     mutedUntil: {
         type: Date,
         default: null

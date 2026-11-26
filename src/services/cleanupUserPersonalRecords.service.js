@@ -13,7 +13,7 @@ import { ConversationMember } from "../models/conversationMember.model.js";
 import { Message } from "../models/message.model.js";
 import { MediaCleanupRecord } from "../models/mediaCleanupRecord.model.js";
 import { recordMomentMedia } from "./expireMoment.service.js";
-import { verifiedAttachment } from "./messageAttachmentRegistry.service.js";
+import { verifiedAttachment, messageAttachments } from "./messageAttachmentRegistry.service.js";
 import { unregisterVideoMedia } from "./videoAssetRegistry.service.js";
 import { removeNotificationThumbnails } from "./notificationThumbnailRegistry.service.js";
 import { fenceMediaCoverage } from "./mediaCoverageBarrier.service.js";
@@ -74,15 +74,16 @@ const cleanupUserPersonalRecords = async (userId, { session } = {}) => {
     }
 
     const attachments = await Message.find({
-        sender: user._id, attachment: { $ne: null }
-    }).select("_id attachment.url attachment.publicId attachment.resourceType attachment.deliveryType +attachment.mediaRegistry").session(session).lean();
+        sender: user._id, $or: [{ attachment: { $ne: null } }, { "attachments.0": { $exists: true } }]
+    }).select("_id attachment.url attachment.publicId attachment.resourceType attachment.deliveryType attachments.url attachments.publicId attachments.resourceType attachments.deliveryType +attachment.mediaRegistry +attachments.mediaRegistry").session(session).lean();
     for (const message of attachments) {
-        const attachment = message.attachment;
+      for (const [index, attachment] of messageAttachments(message).entries()) {
+        const recordId = index === 0 ? `attachment:${message._id}` : `attachment:${message._id}:${index}`;
         const resourceType = ["image", "video", "raw"].includes(attachment.resourceType)
             ? attachment.resourceType : null;
         const metadata = verifiedAttachment(attachment);
         await MediaCleanupRecord.updateOne(
-            { _id: `attachment:${message._id}` },
+            { _id: recordId },
             { $setOnInsert: {
                 user: user._id,
                 sourceType: "attachment",
@@ -98,8 +99,9 @@ const cleanupUserPersonalRecords = async (userId, { session } = {}) => {
             { upsert: true, session }
         );
         if (!metadata) await MediaCleanupRecord.updateOne(
-            { _id: `attachment:${message._id}`, status: { $ne: "completed" } },
+            { _id: recordId, status: { $ne: "completed" } },
             { $set: { status: "unresolved" } }, { session });
+      }
     }
 
     const momentIds = moments.map((moment) => moment._id);

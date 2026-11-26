@@ -145,6 +145,9 @@ const userSchema = new Schema(
             default: true,
         },
 
+        groupMembershipFence: { type: Number, default: 0, select: false },
+        moderationNotificationFence: { type: Number, default: 0, select: false },
+
         deletionRequestedAt: {
             type: Date,
             default: null,

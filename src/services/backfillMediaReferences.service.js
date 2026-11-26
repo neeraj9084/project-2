@@ -12,6 +12,7 @@ import { CloudinaryAssetReference } from "../models/cloudinaryAssetReference.mod
 import { registerAssetReference } from "./cloudinaryAssetReference.service.js";
 import { backfillModerationHolds } from "./backfillModerationHolds.service.js";
 import { fenceMediaCoverage } from "./mediaCoverageBarrier.service.js";
+import { messageAttachments } from "./messageAttachmentRegistry.service.js";
 
 // Only trusted internal verification may set identityVerified. URLs and the
 // currently configured Cloudinary environment are never evidence of identity.
@@ -28,7 +29,8 @@ const sources = {
         ["moment", "mediaUrl", "mediaPublicId", "mediaDeliveryType"]
     ] },
     messages: { model: Message, owner: (d) => d.sender, slots: [
-        ["attachment", "attachment.url", "attachment.publicId", "attachment.deliveryType"]
+        ["attachment", "attachment.url", "attachment.publicId", "attachment.deliveryType"],
+        ["attachment", "attachments.1.url", "attachments.1.publicId", "attachments.1.deliveryType"]
     ] },
     notifications: { model: Notification, owner: (d) => d.recipient, slots: [
         ["notificationThumbnail", "data.videoThumbnail", null, null],
@@ -46,13 +48,13 @@ const sources = {
 const valueAt = (object, path) => path?.split(".").reduce((value, key) => value?.[key], object);
 const validString = (value) => typeof value === "string" && value.length > 0 &&
     value === value.trim() && value !== "[deleted]";
-const registryPath = (source, slot) => source === "messages" ? "attachment.mediaRegistry"
+const registryPath = (source, slot, urlPath) => source === "messages" ? (urlPath.startsWith("attachments.1.") ? "attachments.1.mediaRegistry" : "attachment.mediaRegistry")
     : source === "notifications" ? "mediaRegistry.thumbnail" : `mediaRegistry.${slot}`;
 
 const inspectSlot = (document, source, slot, owner) => {
     const [name, urlPath, publicIdPath, deliveryTypePath] = slot;
     const url = valueAt(document, urlPath);
-    const path = registryPath(source, name);
+    const path = registryPath(source, name, urlPath);
     const metadata = valueAt(document, path) || {};
     // Notification thumbnail aliases share metadata; do not treat an absent
     // alias as a second reference to the same asset.
@@ -69,7 +71,7 @@ const inspectSlot = (document, source, slot, owner) => {
         validString(identity.deliveryType) && validString(url) && metadata.url === url &&
         metadata.publicId === identity.publicId && metadata.deliveryType === identity.deliveryType &&
         (source !== "moments" || !document.mediaResourceType || document.mediaResourceType === identity.resourceType) &&
-        (source !== "messages" || !document.attachment?.resourceType || document.attachment.resourceType === identity.resourceType) &&
+        (source !== "messages" || !valueAt(document, urlPath.replace(/\.url$/, ".resourceType")) || valueAt(document, urlPath.replace(/\.url$/, ".resourceType")) === identity.resourceType) &&
         mongoose.isValidObjectId(owner);
     const assetId = verified ? crypto.createHash("sha256").update(JSON.stringify([
         identity.cloudName, identity.publicId, identity.resourceType, identity.deliveryType
@@ -97,6 +99,7 @@ const auditRegistryReferences = async ({ cursor, limit = 100, dryRun = true } = 
             if (!applicable.length) continue;
             const document = await config.model.collection.findOne({ _id: ref.sourceId });
             if (!document) continue;
+            if (name === "messages") { try { messageAttachments(document); } catch { continue; } }
             for (const slot of applicable) {
                 const entry = inspectSlot(document, name, slot, config.owner(document));
                 if (entry?.verified && entry.assetId === ref.asset && String(config.owner(document)) === String(ref.user)) matches++;
@@ -110,10 +113,10 @@ const auditRegistryReferences = async ({ cursor, limit = 100, dryRun = true } = 
 
 // One page per call; callers persist nextCursor after each successful page.
 // No coverage-complete flag is set here: controllers still need integration.
-const backfillMediaReferences = async ({ source, cursor, limit = 100, dryRun = true } = {}) => {
+const backfillMediaReferences = async ({ source, cursor, limit = 100, dryRun = true, transactionGuard } = {}) => {
     if (source === "registryReferences") return auditRegistryReferences({ cursor, limit, dryRun });
     if (source === "moderationReports" || source === "moderationCopyright") {
-        const result = await backfillModerationHolds({ caseType: source === "moderationReports" ? "report" : "copyright", cursor, limit, dryRun });
+        const result = await backfillModerationHolds({ caseType: source === "moderationReports" ? "report" : "copyright", cursor, limit, dryRun, transactionGuard });
         return { ...result, source, coverageComplete: false };
     }
     const config = sources[source];
@@ -132,9 +135,13 @@ const backfillMediaReferences = async ({ source, cursor, limit = 100, dryRun = t
     for (const initial of page) {
         const process = async (document, session) => {
             if (!document) throw new Error("Source document no longer exists");
+            if (session && transactionGuard) await transactionGuard(session);
+            if (session && !transactionGuard && await mongoose.connection.db.collection("_migration_locks").findOne({ _id: "expiration_indexes" }, { session })) throw new Error("Coordinated migration or backfill is active");
+            if (session && !transactionGuard && await mongoose.connection.db.collection("_media_index_migration").findOne({ _id: "expiration_indexes", status: { $ne: "complete" } }, { session })) throw new Error("Unresolved index migration blocks backfill");
             if (session) await fenceMediaCoverage({ session });
             const counts = { linked: 0, existing: 0, unresolved: 0, staleReferences: 0 };
             const owner = config.owner(document);
+            if (source === "messages") messageAttachments(document);
             for (const slot of config.slots) {
                 const entry = inspectSlot(document, source, slot, owner);
                 if (!entry) continue;
@@ -144,11 +151,12 @@ const backfillMediaReferences = async ({ source, cursor, limit = 100, dryRun = t
                 const currentReference = entry.verified && references.some((ref) => ref.asset === entry.assetId && String(ref.user) === String(owner));
                 // Do not remove references merely because the current source differs:
                 // they may protect historical media or an in-flight migration.
-                counts.staleReferences += references.filter((ref) => !entry.verified || ref.asset !== entry.assetId || String(ref.user) !== String(owner)).length;
+                const validEntries = config.slots.map((candidate) => inspectSlot(document, source, candidate, owner)).filter((candidate) => candidate?.verified);
+                counts.staleReferences += references.filter((ref) => !validEntries.some((candidate) => ref.asset === candidate.assetId) || String(ref.user) !== String(owner)).length;
                 if (!entry.verified) {
                     counts.unresolved++;
                     if (session) await config.model.collection.updateOne({ _id: document._id },
-                        { $set: { [`${entry.path}.status`]: "unresolved" } }, { session });
+                        { $set: { [`${entry.path}.status`]: "unresolved", ...(source === "messages" && slot[1] === "attachment.url" && document.attachments?.length ? { "attachments.0.mediaRegistry.status": "unresolved" } : {}) } }, { session });
                     continue;
                 }
                 counts[currentReference ? "existing" : "linked"]++;
@@ -163,6 +171,10 @@ const backfillMediaReferences = async ({ source, cursor, limit = 100, dryRun = t
                 await registerAssetReference({ assetId: entry.assetId, sourceType: entry.name,
                     sourceId: document._id, userId: owner, session });
                 const updates = { [`${entry.path}.asset`]: entry.assetId, [`${entry.path}.status`]: "linked" };
+                if (source === "messages" && slot[1] === "attachment.url" && document.attachments?.length) {
+                    updates["attachments.0.mediaRegistry.asset"] = entry.assetId;
+                    updates["attachments.0.mediaRegistry.status"] = "linked";
+                }
                 if (source === "conversations") updates[`${entry.path}.referenceUser`] = owner;
                 await config.model.collection.updateOne({ _id: document._id },
                     { $set: updates },

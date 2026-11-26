@@ -7,6 +7,7 @@ import { Notification } from "../models/notification.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { activeModerationAdmins } from "../services/moderationNotification.service.js";
 
 //=============================== reportUser ===================================//
 
@@ -62,14 +63,24 @@ const reportUser = asyncHandler(async (req, res) => {
     let report;
 
     try {
-        // Create user report
-        report = await UserReport.create({
+        const session = await mongoose.startSession();
+        try { await session.withTransaction(async () => {
+        [report] = await UserReport.create([{
             reporter: reporterId,
             reportType: "user",
             reportedUser: userId,
             reason,
             description: cleanDescription,
-        });
+        }], { session });
+        const admins = await activeModerationAdmins({ session });
+        if (admins.length) await Notification.insertMany(admins.map((admin) => ({
+            recipient: admin._id, adminOnly: true, actor: reporterId, type: "report_update", title: "New User Report",
+            message: `${req.user.username} reported the user "${reportedUser.username}".`, entityType: "report", entityId: report._id,
+            data: { reportId: report._id, reporterId, reportedUserId: reportedUser._id, reportedUsername: reportedUser.username,
+                reportedUserName: reportedUser.fullName, reason: report.reason, description: report.description,
+                status: report.status, action: "user_report_created" }
+        })), { session });
+        }); } finally { await session.endSession(); }
     } catch (error) {
         // Duplicate report
         if (error?.code === 11000) {
@@ -80,53 +91,6 @@ const reportUser = asyncHandler(async (req, res) => {
         }
 
         throw error;
-    }
-
-    //=============================== Notify Admins ===============================//
-
-    try {
-        const admins = await User.find({
-            isAdmin: true,
-            isActive: true,
-        }).select("_id");
-
-        if (admins.length > 0) {
-            const notifications = admins.map((admin) => ({
-                recipient: admin._id,
-                actor: reporterId,
-                type: "report_update",
-
-                title: "New User Report",
-
-                message: `${req.user.username} reported the user "${reportedUser.username}".`,
-
-                entityType: "report",
-                entityId: report._id,
-
-                data: {
-                    reportId: report._id,
-                    reporterId: reporterId,
-                    reportedUserId: reportedUser._id,
-
-                    reportedUsername: reportedUser.username,
-                    reportedUserName: reportedUser.fullName,
-
-                    reason: report.reason,
-                    description: report.description,
-                    status: report.status,
-
-                    action: "user_report_created",
-                },
-            }));
-
-            await Notification.insertMany(notifications);
-        }
-    } catch (error) {
-        // Notification failure should not fail the report API
-        console.error(
-            "Failed to create user report notifications:",
-            error.message
-        );
     }
 
     //=============================== Response ===================================//
